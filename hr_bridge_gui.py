@@ -12,12 +12,18 @@ from typing import Optional
 from bleak import BleakClient, BleakScanner
 from pythonosc.udp_client import SimpleUDPClient
 
-# media detection (Windows only)
+# media detection
 try:
     import winrt.windows.media.control as wmc
-    HAS_MEDIA = True
+    HAS_WINRT = True
 except ImportError:
-    HAS_MEDIA = False
+    HAS_WINRT = False
+
+# Pear Desktop API support
+import json
+import urllib.request
+HAS_PEAR = True  # urllib is built-in
+PEAR_DEFAULT_PORT = 26538
 
 # BLE
 BLE_HR_MEASURE = "00002a37-0000-1000-8000-00805f9b34fb"
@@ -39,25 +45,38 @@ def make_packet(cmd, payload=bytes()):
     return bytes(data)
 
 
-if HAS_MEDIA:
-    async def get_media_info():
+if HAS_WINRT:
+    async def get_winrt_media():
         try:
             session = await wmc.GlobalSystemMediaTransportControlsSessionManager.request_async()
             s = session.get_current_session()
             if s is None:
                 return None
             info = await s.try_get_media_properties_async()
-            return {"title": info.title, "artist": info.artist}
+            return {"title": info.title or "", "artist": info.artist or ""}
         except:
             return None
 else:
-    async def get_media_info():
+    async def get_winrt_media():
+        return None
+
+def get_pear_media_sync(port):
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/v1/song", timeout=3) as r:
+            if r.status != 200:
+                return None
+            data = json.loads(r.read())
+            if not data:
+                return None
+            author = (data.get("author") or {}).get("name", "") if isinstance(data.get("author"), dict) else (data.get("artist") or "")
+            return {"title": data.get("title", "") or "", "artist": author or ""}
+    except Exception:
         return None
 
 
 # ── Bridge Engine ───────────────────────────────────────────
 class HRBridge:
-    def __init__(self, address, template, log_cb, show_hr=True, show_battery=True, show_media=False, show_status=False, show_extremes=True, status_text="", poll_interval=3, keepalive_interval=30, osc_host="127.0.0.1", osc_port=9000):
+    def __init__(self, address, template, log_cb, show_hr=True, show_battery=True, show_media=False, show_status=False, show_extremes=True, status_text="", poll_interval=3, keepalive_interval=30, osc_host="127.0.0.1", osc_port=9000, media_source="none", pear_port=PEAR_DEFAULT_PORT):
         self.address = address
         self.template = template
         self.log = log_cb
@@ -69,6 +88,8 @@ class HRBridge:
         self.status_text = status_text
         self.poll_interval = poll_interval
         self.keepalive_interval = keepalive_interval
+        self.media_source = media_source
+        self.pear_port = pear_port
         self.osc = SimpleUDPClient(osc_host, osc_port)
         self.bpm = 0
         self.hr_min = 999
@@ -205,8 +226,8 @@ class HRBridge:
                 if poll_count >= 3:
                     await client.write_gatt_char(BLE_FEE2_OUT, make_packet(47, bytes([])), response=False)
                     poll_count = 0
-                if self.show_media and HAS_MEDIA:
-                    media = await get_media_info()
+                if self.show_media and self.media_source != "none":
+                    media = await self._fetch_media()
                     if media:
                         self.song = media.get("title", "")
                         self.artist = media.get("artist", "")
@@ -233,6 +254,13 @@ class HRBridge:
     def _run_loop(self):
         asyncio.set_event_loop(self._loop)
         self._loop.run_until_complete(self.run_forever())
+
+    async def _fetch_media(self):
+        if self.media_source == "winrt":
+            return await get_winrt_media()
+        elif self.media_source == "pear":
+            return await asyncio.to_thread(get_pear_media_sync, self.pear_port)
+        return None
 
     def reset_hr_extremes(self):
         self.hr_min = 999
@@ -474,8 +502,26 @@ class App(tk.Tk):
         self.chk_extremes = self._toggles_vars["extremes"]
         self.chk_egg = self._toggles_vars["egg"]
 
-        if not HAS_MEDIA:
-            tk.Label(body, text="(Win only)", bg=BG_CARD, fg=TEXT_GRAY, font=("", 7)).pack(side="left")
+        # media source
+        src_row = tk.Frame(card, bg=BG_CARD)
+        src_row.pack(fill="x", pady=(4, 0))
+        tk.Label(src_row, text="Media Source:", bg=BG_CARD, fg=TEXT_GRAY, font=("", 8)).pack(side="left")
+        self.media_source = tk.StringVar(value=cfg.get("media_source", "none"))
+        sources = ["none", "winrt", "pear"]
+        src_menu = tk.OptionMenu(src_row, self.media_source, *sources)
+        src_menu.config(bg=BG_MID, fg=TEXT_WHITE, bd=0, highlightthickness=0, activebackground=BG_CARD)
+        src_menu["menu"].config(bg=BG_MID, fg=TEXT_WHITE)
+        src_menu.pack(side="left", padx=(6, 0))
+
+        # pear port
+        tk.Label(src_row, text="Port:", bg=BG_CARD, fg=TEXT_GRAY, font=("", 8)).pack(side="left", padx=(10, 0))
+        self.pear_port = tk.IntVar(value=cfg.get("pear_port", PEAR_DEFAULT_PORT))
+        tk.Spinbox(src_row, from_=1024, to=65535, textvariable=self.pear_port, width=6,
+                   bg=BG_INPUT, fg=TEXT_WHITE, bd=0, highlightthickness=1,
+                   highlightbackground=BG_MID, highlightcolor=ACCENT, buttonbackground=BG_MID).pack(side="left", padx=(4, 0))
+
+        if not HAS_WINRT:
+            tk.Label(src_row, text="(winrt unavailable)", bg=BG_CARD, fg=TEXT_GRAY, font=("", 7)).pack(side="left", padx=(6, 0))
 
         # reset extremes
         reset_btn = tk.Button(card, text="Reset Min/Max", font=("", 8),
@@ -579,6 +625,8 @@ class App(tk.Tk):
                 "hr": self.chk_hr.get(),
                 "battery": self.chk_batt.get(),
                 "media": self.chk_media.get(),
+                "media_source": self.media_source.get(),
+                "pear_port": self.pear_port.get(),
                 "extremes": self.chk_extremes.get(),
                 "egg": self.chk_egg.get(),
                 "egg_text": self.egg_txt.get(),
@@ -603,6 +651,8 @@ class App(tk.Tk):
                 show_hr=self.chk_hr.get(),
                 show_battery=self.chk_batt.get(),
                 show_media=self.chk_media.get(),
+                media_source=self.media_source.get(),
+                pear_port=self.pear_port.get(),
                 show_extremes=self.chk_extremes.get(),
                 show_status=self.chk_egg.get(),
                 status_text=self.egg_txt.get(),
