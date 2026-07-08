@@ -15,7 +15,9 @@ jobs:
           python-version: "3.12"
 
       - run: pip install bleak python-osc pyinstaller
-      - run: pip install winrt 2>nul || echo "winrt not available, media disabled"
+      - name: Install winrt (optional, for media support)
+        continue-on-error: true
+        run: pip install winrt 2>$null
 
       # Build CLI version
       - run: pyinstaller --onefile --name hr_bridge hr_bridge.py

@@ -57,7 +57,7 @@ else:
 
 # ── Bridge Engine ───────────────────────────────────────────
 class HRBridge:
-    def __init__(self, address, template, log_cb, show_hr=True, show_battery=True, show_media=False, show_status=False, status_text=""):
+    def __init__(self, address, template, log_cb, show_hr=True, show_battery=True, show_media=False, show_status=False, status_text="", poll_interval=3, keepalive_interval=30, osc_host="127.0.0.1", osc_port=9000):
         self.address = address
         self.template = template
         self.log = log_cb
@@ -66,7 +66,9 @@ class HRBridge:
         self.show_media = show_media
         self.show_status = show_status
         self.status_text = status_text
-        self.osc = SimpleUDPClient("127.0.0.1", 9000)
+        self.poll_interval = poll_interval
+        self.keepalive_interval = keepalive_interval
+        self.osc = SimpleUDPClient(osc_host, osc_port)
         self.bpm = 0
         self.battery = 0
         self.running = False
@@ -176,11 +178,11 @@ class HRBridge:
             last_keepalive = last_notify
             poll_count = 0
             while self.running and client.is_connected:
-                await asyncio.sleep(3)
+                await asyncio.sleep(self.poll_interval)
                 now = asyncio.get_event_loop().time()
                 if now - last_notify >= 2:
                     await client.write_gatt_char(BLE_FEE2_OUT, make_packet(CMD_TRIGGER_HR, bytes([0x00])), response=False)
-                if now - last_keepalive >= 30:
+                if now - last_keepalive >= self.keepalive_interval:
                     await client.write_gatt_char(BLE_FEE2_OUT, make_packet(CMD_START_DYNAMIC_HR, bytes([0x00])), response=False)
                     last_keepalive = now
                 poll_count += 1
@@ -240,6 +242,8 @@ def save_config(data):
 
 
 # ── GUI ─────────────────────────────────────────────────────
+BLANK_EGG_SECRETS = ("boihanny", "sr4 series")
+
 class App(ttk.Frame):
     def __init__(self, root):
         super().__init__(root, padding=12)
@@ -247,6 +251,7 @@ class App(ttk.Frame):
         self.root.title("C20 HR Bridge")
         self.root.resizable(False, False)
         self.bridge = None
+        self.egg_dev = False
         cfg = load_config()
         self._build(cfg)
         self.grid()
@@ -285,7 +290,9 @@ class App(ttk.Frame):
         self.egg_frame.grid(row=3, column=0, columnspan=3, sticky="ew", pady=2)
         ttk.Label(self.egg_frame, text="Egg Text:", font=("", 8)).grid(row=0, column=0, sticky="w")
         self.egg_txt = tk.StringVar(value=cfg.get("egg_text", ""))
-        ttk.Entry(self.egg_frame, textvariable=self.egg_txt, width=40).grid(row=0, column=1, padx=6, sticky="ew")
+        egg_entry = ttk.Entry(self.egg_frame, textvariable=self.egg_txt, width=40)
+        egg_entry.grid(row=0, column=1, padx=6, sticky="ew")
+        egg_entry.bind("<KeyRelease>", self._check_blank_egg)
         ttk.Label(self.egg_frame, text="(short = tiny chatbox)", font=("", 7), foreground="gray").grid(row=0, column=2, padx=(0, 4))
 
         self.template_frame = ttk.Frame(self)
@@ -296,26 +303,69 @@ class App(ttk.Frame):
 
         # placeholder hint
         ttk.Label(self, text="Placeholders: {bpm} {battery} {song} {artist} {title}", font=("", 7), foreground="gray").grid(row=5, column=0, columnspan=3, sticky="w")
+
+        # ── dev frame (hidden until egg dev unlocked) ──
+        self.dev_frame = ttk.LabelFrame(self, text="\u2699 Dev Options", padding=8)
+        self.dev_frame.grid(row=6, column=0, columnspan=3, sticky="ew", pady=4)
+        self.dev_frame.grid_remove()
+
+        # restore blank egg dev mode from config
+        if cfg.get("blank_egg", False):
+            self.egg_dev = True
+            self.dev_frame.grid()
+
         self._on_egg_toggle()
+
+        ttk.Label(self.dev_frame, text="Poll Interval (s):", font=("", 8)).grid(row=0, column=0, sticky="w")
+        self.dev_poll = tk.DoubleVar(value=cfg.get("poll_interval", 3))
+        ttk.Spinbox(self.dev_frame, from_=1, to=10, increment=0.5, textvariable=self.dev_poll, width=5).grid(row=0, column=1, sticky="w", padx=4)
+
+        ttk.Label(self.dev_frame, text="Keepalive (s):", font=("", 8)).grid(row=0, column=2, sticky="w", padx=(12, 0))
+        self.dev_keepalive = tk.IntVar(value=cfg.get("keepalive_interval", 30))
+        ttk.Spinbox(self.dev_frame, from_=5, to=120, increment=5, textvariable=self.dev_keepalive, width=5).grid(row=0, column=3, sticky="w", padx=4)
+
+        ttk.Label(self.dev_frame, text="OSC Host:", font=("", 8)).grid(row=1, column=0, sticky="w", pady=(4, 0))
+        self.dev_osc_host = tk.StringVar(value=cfg.get("osc_host", "127.0.0.1"))
+        ttk.Entry(self.dev_frame, textvariable=self.dev_osc_host, width=15).grid(row=1, column=1, sticky="w", padx=4, pady=(4, 0))
+
+        ttk.Label(self.dev_frame, text="Port:", font=("", 8)).grid(row=1, column=2, sticky="w", padx=(12, 0), pady=(4, 0))
+        self.dev_osc_port = tk.IntVar(value=cfg.get("osc_port", 9000))
+        ttk.Spinbox(self.dev_frame, from_=1024, to=65535, textvariable=self.dev_osc_port, width=6).grid(row=1, column=3, sticky="w", padx=4, pady=(4, 0))
 
         # ── start/stop ──
         btn_row = ttk.Frame(self)
-        btn_row.grid(row=6, column=0, columnspan=3, pady=8)
+        btn_row.grid(row=7, column=0, columnspan=3, pady=8)
         self.btn = ttk.Button(btn_row, text="\u25b6 Start", command=self._toggle)
         self.btn.pack(side="left", padx=4)
 
         # ── log ──
         self.log = scrolledtext.ScrolledText(self, width=62, height=14, font=("Consolas", 9))
-        self.log.grid(row=7, column=0, columnspan=3)
+        self.log.grid(row=8, column=0, columnspan=3)
         self.log.insert("end", "Ready \u2014 press Start to begin.\n")
         self.log.see("end")
 
+    def _check_blank_egg(self, _event=None):
+        txt = self.egg_txt.get().strip().lower()
+        if txt in BLANK_EGG_SECRETS and not self.egg_dev:
+            self.egg_dev = True
+            self.dev_frame.grid()
+            self.write_log("  \U0001f3eb BlankEgg Dev Mode unlocked!")
+            from tkinter import messagebox
+            messagebox.showinfo("\U0001f3eb Egg", "u found the dev egggmoooodeee go to dev options")
+        elif txt not in BLANK_EGG_SECRETS and self.egg_dev:
+            pass
+
     def _on_egg_toggle(self):
         mode = self.chk_egg.get()
+        state = "normal" if mode else "disabled"
         for child in self.egg_frame.winfo_children():
-            child.configure(state="normal" if mode else "disabled")
+            child.configure(state=state)
         for child in self.template_frame.winfo_children():
             child.configure(state="disabled" if mode else "normal")
+        if mode and self.egg_dev:
+            self.dev_frame.grid()
+        elif not mode:
+            pass
 
     # ── logging ──────────────────────────────────────────────
     def write_log(self, msg):
@@ -338,9 +388,18 @@ class App(ttk.Frame):
                 "media": self.chk_media.get(),
                 "egg": self.chk_egg.get(),
                 "egg_text": self.egg_txt.get(),
+                "blank_egg": self.egg_dev,
+                "poll_interval": self.dev_poll.get() if self.egg_dev else 3,
+                "keepalive_interval": self.dev_keepalive.get() if self.egg_dev else 30,
+                "osc_host": self.dev_osc_host.get() if self.egg_dev else "127.0.0.1",
+                "osc_port": self.dev_osc_port.get() if self.egg_dev else 9000,
             })
         else:
             self.log.delete("1.0", "end")
+            poll = self.dev_poll.get() if self.egg_dev else 3
+            ka = self.dev_keepalive.get() if self.egg_dev else 30
+            host = self.dev_osc_host.get() if self.egg_dev else "127.0.0.1"
+            port = self.dev_osc_port.get() if self.egg_dev else 9000
             self.bridge = HRBridge(
                 address=self.addr.get(),
                 template=self.template.get(),
@@ -350,6 +409,10 @@ class App(ttk.Frame):
                 show_media=self.chk_media.get(),
                 show_status=self.chk_egg.get(),
                 status_text=self.egg_txt.get(),
+                poll_interval=poll,
+                keepalive_interval=ka,
+                osc_host=host,
+                osc_port=port,
             )
             self.bridge.start()
             self.btn.config(text="\u25a0 Stop")
