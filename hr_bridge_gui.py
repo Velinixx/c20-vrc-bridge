@@ -853,11 +853,14 @@ class App(tk.Tk):
             ("accent",      "Accent"),      ("accent_light", "Accent Lt"),
             ("text_white",  "Text"),        ("text_gray", "Text Dim"),
         ]
+        # wrap swatches in a frame so grid doesn't conflict with pack
+        swatch_frame = tk.Frame(body, bg=BG_CARD)
+        swatch_frame.pack(fill="x", pady=(4, 0))
         self._color_vars = {}
         for col, (cfg_key, label) in enumerate(color_keys):
             var = tk.StringVar(value=cfg.get(f"color_{cfg_key}", fallback[cfg_key]))
             self._color_vars[cfg_key] = var
-            f = tk.Frame(body, bg=BG_CARD)
+            f = tk.Frame(swatch_frame, bg=BG_CARD)
             f.grid(row=0, column=col, padx=(0, 8), sticky="w")
             btn = tk.Button(f, text="  ", bg=var.get(), bd=1, relief="solid",
                             width=3, cursor="hand2", command=lambda: None)
@@ -865,7 +868,7 @@ class App(tk.Tk):
             tk.Label(f, text=label, bg=BG_CARD, fg=TEXT_GRAY, font=("", 7)).pack(side="left", padx=(3, 0))
         for col, (cfg_key, _) in enumerate(color_keys):
             var = self._color_vars[cfg_key]
-            f = body.grid_slaves(row=0, column=col)[0]
+            f = swatch_frame.grid_slaves(row=0, column=col)[0]
             btn = f.winfo_children()[0]
             btn.config(command=lambda v=var, b=btn: self._pick_color(v, b))
 
