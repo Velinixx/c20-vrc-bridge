@@ -342,7 +342,7 @@ class App(tk.Tk):
         super().__init__()
         self.title("C20 HR Bridge")
         self.configure(bg=BG_DARK)
-        self.resizable(False, False)
+        self.minsize(520, 400)
         setup_style()
 
         self.bridge = None
@@ -532,10 +532,12 @@ class App(tk.Tk):
 
     # ── page: log ─────────────────────────────────────────────
     def _build_log_page(self, page):
-        card = self._card(page, "Activity Log")
+        card = tk.Frame(page, bg=BG_CARD, padx=10, pady=8)
+        card.pack(fill="both", expand=True)
+        tk.Label(card, text="Activity Log", bg=BG_CARD, fg=ACCENT_LIGHT, font=("", 9, "bold"), anchor="w").pack(fill="x")
         self.log = tk.Text(card, bg=BG_INPUT, fg=TEXT_GRAY, font=("Consolas", 9),
                            bd=0, highlightthickness=1, highlightbackground=BG_MID,
-                           highlightcolor=ACCENT, height=18, width=56, wrap="word")
+                           highlightcolor=ACCENT, wrap="word")
         self.log.pack(fill="both", expand=True, pady=(6, 0))
         self.log.insert("end", "Ready \u2014 press Start to begin.\n")
         self.log.config(state="disabled")
