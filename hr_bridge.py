@@ -175,17 +175,11 @@ async def find_watch():
     return None
 
 
-async def main():
-    if len(sys.argv) > 1 and sys.argv[1] != "auto":
-        address = sys.argv[1]
-    else:
-        address = await find_watch()
-        if not address:
-            print("\nTip: You can pass the BLE address directly:")
-            print("  python hr_bridge.py 96:D6:AF:D0:2B:6E")
-            return
+DEFAULT_ADDR = "96:D6:AF:D0:2B:6E"
 
-    bridge = HRBridge(address)
+
+async def main():
+    bridge = HRBridge(DEFAULT_ADDR)
     await bridge.run_forever()
 
 
@@ -194,3 +188,6 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\n👋 Bye!", flush=True)
+    except Exception as e:
+        print(f"\n⚠️ Error: {e}", flush=True)
+    input("\nPress Enter to exit...")
