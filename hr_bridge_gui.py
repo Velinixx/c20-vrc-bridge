@@ -634,6 +634,7 @@ class App(tk.Tk):
     # ── page: features ────────────────────────────────────────
     def _build_features_page(self, page, cfg):
         toggles_card = CollapsibleCard(page, "Toggles")
+        toggles_card.pack(fill="x", pady=(0, 6))
         body = toggles_card.body
 
         toggles_data = [
@@ -696,6 +697,7 @@ class App(tk.Tk):
 
         # ── HR source ───────────────────────────────────────────
         hr_card = CollapsibleCard(page, "Heart Rate Source")
+        hr_card.pack(fill="x", pady=(0, 6))
         hr_body = hr_card.body
 
         tk.Label(hr_body, text="Source:", bg=BG_CARD, fg=TEXT_GRAY, font=("", 8)).pack(side="left")
@@ -843,6 +845,7 @@ class App(tk.Tk):
 
     def _theme_card(self, page, cfg):
         card = CollapsibleCard(page, "\U0001f3a8  Theme", collapsed=True)
+        card.pack(fill="x", pady=(0, 6))
         body = card.body
 
         fallback = {"bg_dark": BG_DARK, "bg_mid": BG_MID, "bg_card": BG_CARD, "bg_input": BG_INPUT,
