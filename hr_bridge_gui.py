@@ -264,113 +264,277 @@ def save_config(data):
 
 
 # ── GUI ─────────────────────────────────────────────────────
+# ── Constants ──────────────────────────────────────────────────
 BLANK_EGG_SECRETS = ("boihanny", "sr4 series")
 
-class App(ttk.Frame):
-    def __init__(self, root):
-        super().__init__(root, padding=12)
-        self.root = root
-        self.root.title("C20 HR Bridge")
-        self.root.resizable(False, False)
+# ── Color Palette (Magic Chatbox inspired) ─────────────────────
+BG_DARK     = "#1a1a2e"
+BG_MID      = "#232244"
+BG_CARD     = "#2d2b55"
+BG_INPUT    = "#1e1e3a"
+ACCENT      = "#7c5cbf"
+ACCENT_LIGHT = "#9d7de0"
+TEXT_WHITE  = "#f0eefe"
+TEXT_GRAY   = "#a8a0c8"
+SUCCESS     = "#4ade80"
+DANGER      = "#ef4444"
+
+def setup_style():
+    style = ttk.Style()
+    style.theme_use("clam")
+    style.configure(".", background=BG_DARK, foreground=TEXT_WHITE, fieldbackground=BG_INPUT)
+    style.configure("TFrame", background=BG_DARK)
+    style.configure("TLabel", background=BG_DARK, foreground=TEXT_WHITE)
+    style.configure("TLabelframe", background=BG_DARK, foreground=ACCENT_LIGHT, fieldbackground=BG_CARD)
+    style.configure("TLabelframe.Label", background=BG_DARK, foreground=ACCENT_LIGHT)
+    style.configure("TEntry", fieldbackground=BG_INPUT, foreground=TEXT_WHITE, insertcolor=TEXT_WHITE)
+    style.configure("TSpinbox", fieldbackground=BG_INPUT, foreground=TEXT_WHITE, arrowcolor=TEXT_WHITE)
+    style.map("TEntry", fieldbackground=[("focus", BG_INPUT)])
+    style.configure("TCheckbutton", background=BG_DARK, foreground=TEXT_WHITE)
+    style.map("TCheckbutton", background=[("active", BG_MID)])
+    style.configure("TButton", background=ACCENT, foreground=TEXT_WHITE, bordercolor=ACCENT, focuscolor="none")
+    style.map("TButton", background=[("active", ACCENT_LIGHT), ("pressed", "#5a3d99")])
+    style.configure("TSidebar.TButton", background=BG_MID, foreground=TEXT_GRAY, borderwidth=0, focuscolor="none")
+    style.map("TSidebar.TButton", background=[("active", BG_CARD), ("selected", ACCENT)])
+    style.configure("Success.TButton", background=SUCCESS, foreground="#000000")
+    style.map("Success.TButton", background=[("active", "#6ee7a0")])
+    style.configure("Danger.TButton", background=DANGER, foreground=TEXT_WHITE)
+    style.map("Danger.TButton", background=[("active", "#f87171")])
+    style.configure("TScrollbar", background=BG_MID, troughcolor=BG_DARK, bordercolor=BG_MID, arrowcolor=TEXT_GRAY)
+
+
+class Page(tk.Frame):
+    """Base page with a card-style container."""
+    def __init__(self, parent, **kw):
+        super().__init__(parent, bg=BG_DARK, **kw)
+
+
+class App(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("C20 HR Bridge")
+        self.configure(bg=BG_DARK)
+        self.resizable(False, False)
+        setup_style()
+
         self.bridge = None
         self.egg_dev = False
         cfg = load_config()
-        self._build(cfg)
-        self.grid()
-        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
-    # ── build ────────────────────────────────────────────────
-    def _build(self, cfg):
-        # title
-        ttk.Label(self, text="C20 \u2192 VRChat Heart Rate Bridge", font=("", 11, "bold")).grid(row=0, column=0, columnspan=3, pady=(0, 8))
+        # ── top bar ──────────────────────────────────────────
+        top = tk.Frame(self, bg=BG_MID, height=48)
+        top.pack(fill="x")
+        top.pack_propagate(False)
+        tk.Label(top, text="C20  →  VRChat Bridge", bg=BG_MID, fg=ACCENT_LIGHT, font=("", 11, "bold")).pack(side="left", padx=14, pady=10)
 
-        # ── address row ──
-        ttk.Label(self, text="Watch Address:").grid(row=1, column=0, sticky="w", pady=2)
-        self.addr = tk.StringVar(value=cfg.get("address", DEFAULT_ADDR))
-        ttk.Entry(self, textvariable=self.addr, width=22).grid(row=1, column=1, columnspan=2, sticky="ew", padx=6, pady=2)
+        # ── body: sidebar + content ──────────────────────────
+        body = tk.Frame(self, bg=BG_DARK)
+        body.pack(fill="both", expand=True)
 
-        # ── toggles ──
-        toggles = ttk.LabelFrame(self, text="Features", padding=8)
-        toggles.grid(row=2, column=0, columnspan=3, sticky="ew", pady=6)
+        # sidebar
+        sidebar = tk.Frame(body, bg=BG_MID, width=52)
+        sidebar.pack(side="left", fill="y")
+        sidebar.pack_propagate(False)
 
-        self.chk_hr = tk.BooleanVar(value=cfg.get("hr", True))
-        ttk.Checkbutton(toggles, text="Heart Rate", variable=self.chk_hr).grid(row=0, column=0, sticky="w", padx=4)
+        icons = ["\u2764", "\u2699", "\u2630"]
+        tips  = ["Status", "Features", "Log"]
+        self.nav_btns = []
+        for i, (ico, tip) in enumerate(zip(icons, tips)):
+            btn = tk.Button(sidebar, text=ico, font=("", 16), bg=BG_MID, fg=TEXT_GRAY,
+                            bd=0, activebackground=BG_CARD, activeforeground=ACCENT_LIGHT,
+                            cursor="hand2", relief="flat")
+            btn.pack(pady=(12 if i == 0 else 4, 4))
+            self.nav_btns.append(btn)
 
-        self.chk_batt = tk.BooleanVar(value=cfg.get("battery", True))
-        ttk.Checkbutton(toggles, text="Battery", variable=self.chk_batt).grid(row=0, column=1, sticky="w", padx=4)
+        # content area
+        content = tk.Frame(body, bg=BG_DARK, padx=14, pady=10)
+        content.pack(side="right", fill="both", expand=True)
 
-        self.chk_media = tk.BooleanVar(value=cfg.get("media", False))
-        ttk.Checkbutton(toggles, text="Media Info", variable=self.chk_media).grid(row=0, column=2, sticky="w", padx=4)
-        if not HAS_MEDIA:
-            ttk.Label(toggles, text="(Win only)", font=("", 8), foreground="gray").grid(row=0, column=3, padx=(0, 4))
+        # ── pages ────────────────────────────────────────────
+        self._pages = []
 
-        self.chk_extremes = tk.BooleanVar(value=cfg.get("extremes", True))
-        ttk.Checkbutton(toggles, text="Min/Max HR", variable=self.chk_extremes).grid(row=0, column=4, sticky="w", padx=4)
+        p0 = Page(content)
+        self._pages.append(p0)
 
-        self.chk_egg = tk.BooleanVar(value=cfg.get("egg", False))
-        ttk.Checkbutton(toggles, text="Egg Mode", variable=self.chk_egg, command=self._on_egg_toggle).grid(row=0, column=5, sticky="w", padx=4)
+        p1 = Page(content)
+        self._pages.append(p1)
 
-        # ── egg text / template ──
-        self.egg_frame = ttk.Frame(self)
-        self.egg_frame.grid(row=3, column=0, columnspan=3, sticky="ew", pady=2)
-        ttk.Label(self.egg_frame, text="Egg Text:", font=("", 8)).grid(row=0, column=0, sticky="w")
-        self.egg_txt = tk.StringVar(value=cfg.get("egg_text", ""))
-        egg_entry = ttk.Entry(self.egg_frame, textvariable=self.egg_txt, width=40)
-        egg_entry.grid(row=0, column=1, padx=6, sticky="ew")
-        egg_entry.bind("<KeyRelease>", self._check_blank_egg)
-        ttk.Label(self.egg_frame, text="(short = tiny chatbox)", font=("", 7), foreground="gray").grid(row=0, column=2, padx=(0, 4))
+        p2 = Page(content)
+        self._pages.append(p2)
 
-        self.template_frame = ttk.Frame(self)
-        self.template_frame.grid(row=4, column=0, columnspan=3, sticky="ew", pady=2)
-        ttk.Label(self.template_frame, text="Chatbox Format:", font=("", 8)).grid(row=0, column=0, sticky="w")
-        self.template = tk.StringVar(value=cfg.get("template", DEFAULT_TEMPLATE))
-        ttk.Entry(self.template_frame, textvariable=self.template, width=40).grid(row=0, column=1, padx=6, sticky="ew")
+        self._build_status_page(p0, cfg)
+        self._build_features_page(p1, cfg)
+        self._build_log_page(p2)
 
-        # placeholder hint
-        ttk.Label(self, text="Placeholders: {bpm} {hr_min} {hr_max} {battery} {song} {artist} {title}", font=("", 7), foreground="gray").grid(row=5, column=0, columnspan=3, sticky="w")
+        for p in self._pages:
+            p.pack(fill="both", expand=True)
 
-        # ── dev frame (hidden until egg dev unlocked) ──
-        self.dev_frame = ttk.LabelFrame(self, text="\u2699 Dev Options", padding=8)
-        self.dev_frame.grid(row=6, column=0, columnspan=3, sticky="ew", pady=4)
-        self.dev_frame.grid_remove()
+        # wire nav
+        for i, btn in enumerate(self.nav_btns):
+            btn.config(command=lambda idx=i: self._show_page(idx))
 
-        # restore blank egg dev mode from config
-        if cfg.get("blank_egg", False):
-            self.egg_dev = True
-            self.dev_frame.grid()
-
+        # ── egg toggle initial state after all pages exist ──
         self._on_egg_toggle()
 
-        ttk.Label(self.dev_frame, text="Poll Interval (s):", font=("", 8)).grid(row=0, column=0, sticky="w")
-        self.dev_poll = tk.DoubleVar(value=cfg.get("poll_interval", 3))
-        ttk.Spinbox(self.dev_frame, from_=1, to=10, increment=0.5, textvariable=self.dev_poll, width=5).grid(row=0, column=1, sticky="w", padx=4)
+        # ── BlankEgg config restore ──
+        if cfg.get("blank_egg", False):
+            self.egg_dev = True
+            self._show_dev()
 
-        ttk.Label(self.dev_frame, text="Keepalive (s):", font=("", 8)).grid(row=0, column=2, sticky="w", padx=(12, 0))
-        self.dev_keepalive = tk.IntVar(value=cfg.get("keepalive_interval", 30))
-        ttk.Spinbox(self.dev_frame, from_=5, to=120, increment=5, textvariable=self.dev_keepalive, width=5).grid(row=0, column=3, sticky="w", padx=4)
+        self._show_page(0)
 
-        ttk.Label(self.dev_frame, text="OSC Host:", font=("", 8)).grid(row=1, column=0, sticky="w", pady=(4, 0))
-        self.dev_osc_host = tk.StringVar(value=cfg.get("osc_host", "127.0.0.1"))
-        ttk.Entry(self.dev_frame, textvariable=self.dev_osc_host, width=15).grid(row=1, column=1, sticky="w", padx=4, pady=(4, 0))
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        ttk.Label(self.dev_frame, text="Port:", font=("", 8)).grid(row=1, column=2, sticky="w", padx=(12, 0), pady=(4, 0))
-        self.dev_osc_port = tk.IntVar(value=cfg.get("osc_port", 9000))
-        ttk.Spinbox(self.dev_frame, from_=1024, to=65535, textvariable=self.dev_osc_port, width=6).grid(row=1, column=3, sticky="w", padx=4, pady=(4, 0))
+    # ── page switching ────────────────────────────────────────
+    def _show_page(self, idx):
+        for i, p in enumerate(self._pages):
+            p.pack_forget() if i != idx else p.pack(fill="both", expand=True)
+        for i, btn in enumerate(self.nav_btns):
+            btn.config(bg=BG_CARD if i == idx else BG_MID, fg=ACCENT_LIGHT if i == idx else TEXT_GRAY)
 
-        ttk.Button(self.dev_frame, text="Reset Min/Max", command=self._reset_extremes).grid(row=2, column=0, columnspan=4, pady=(6, 0))
+    def _card(self, parent, text):
+        f = tk.Frame(parent, bg=BG_CARD, padx=10, pady=8)
+        tk.Label(f, text=text, bg=BG_CARD, fg=ACCENT_LIGHT, font=("", 9, "bold"), anchor="w").pack(fill="x")
+        return f
 
-        # ── start/stop ──
-        btn_row = ttk.Frame(self)
-        btn_row.grid(row=7, column=0, columnspan=3, pady=8)
-        self.btn = ttk.Button(btn_row, text="\u25b6 Start", command=self._toggle)
-        self.btn.pack(side="left", padx=4)
+    # ── page: status ──────────────────────────────────────────
+    def _build_status_page(self, page, cfg):
+        # address
+        card = self._card(page, "Watch")
+        addr_row = tk.Frame(card, bg=BG_CARD)
+        addr_row.pack(fill="x", pady=(6, 0))
+        tk.Label(addr_row, text="BLE Address", bg=BG_CARD, fg=TEXT_GRAY, font=("", 8)).pack(side="left")
+        self.addr = tk.StringVar(value=cfg.get("address", DEFAULT_ADDR))
+        tk.Entry(addr_row, textvariable=self.addr, bg=BG_INPUT, fg=TEXT_WHITE, insertbackground=TEXT_WHITE,
+                 bd=0, highlightthickness=1, highlightbackground=BG_MID, highlightcolor=ACCENT, width=24).pack(side="right")
 
-        # ── log ──
-        self.log = scrolledtext.ScrolledText(self, width=62, height=14, font=("Consolas", 9))
-        self.log.grid(row=8, column=0, columnspan=3)
+        # template
+        card2 = self._card(page, "Chatbox Format")
+        self.template = tk.StringVar(value=cfg.get("template", DEFAULT_TEMPLATE))
+        self._template_entry = tk.Entry(card2, textvariable=self.template, bg=BG_INPUT, fg=TEXT_WHITE, insertbackground=TEXT_WHITE,
+                                        bd=0, highlightthickness=1, highlightbackground=BG_MID, highlightcolor=ACCENT, width=44)
+        self._template_entry.pack(fill="x", pady=(6, 2))
+        tk.Label(card2, text="{bpm} {hr_min} {hr_max} {battery} {song} {artist} {title}",
+                 bg=BG_CARD, fg=TEXT_GRAY, font=("", 7)).pack(anchor="w")
+
+        # egg mode
+        self.egg_frame = tk.Frame(page, bg=BG_DARK)
+        self.egg_frame.pack(fill="x", pady=(0, 0))
+        self.egg_txt = tk.StringVar(value=cfg.get("egg_text", ""))
+        self._egg_entry = tk.Entry(self.egg_frame, textvariable=self.egg_txt, bg=BG_INPUT, fg=TEXT_WHITE,
+                                   insertbackground=TEXT_WHITE, bd=0, highlightthickness=1,
+                                   highlightbackground=BG_MID, highlightcolor=ACCENT, width=44)
+        self._egg_entry.pack(side="left", padx=(0, 6))
+        self._egg_entry.bind("<KeyRelease>", self._check_blank_egg)
+        tk.Label(self.egg_frame, text="Egg text", bg=BG_DARK, fg=TEXT_GRAY, font=("", 7)).pack(side="left")
+
+        # start / stop
+        btn_frame = tk.Frame(page, bg=BG_DARK)
+        btn_frame.pack(fill="x", pady=(10, 0))
+        self.btn = tk.Button(btn_frame, text="\u25b6  Start", font=("", 10, "bold"),
+                             bg=SUCCESS, fg="#000", bd=0, padx=18, pady=4,
+                             activebackground="#6ee7a0", cursor="hand2",
+                             command=self._toggle)
+        self.btn.pack(side="left")
+
+        # dev panel
+        self._dev_build(page, cfg)
+
+    # ── page: features ────────────────────────────────────────
+    def _build_features_page(self, page, cfg):
+        card = self._card(page, "Toggles")
+
+        toggles_data = [
+            ("\u2764  Heart Rate", "hr", True),
+            ("\U0001f50b  Battery", "battery", True),
+            ("\U0001f3b5  Media Info", "media", False),
+            ("\U0001f7e2  Min / Max HR", "extremes", True),
+            ("\U0001f95a  Egg Mode", "egg", False),
+        ]
+        self._toggles_vars = {}
+        for i, (label, key, default) in enumerate(toggles_data):
+            var = tk.BooleanVar(value=cfg.get(key, default))
+            self._toggles_vars[key] = var
+            cb = tk.Checkbutton(card, text=label, variable=var,
+                                bg=BG_CARD, fg=TEXT_WHITE, selectcolor=BG_INPUT,
+                                activebackground=BG_CARD, activeforeground=TEXT_WHITE,
+                                font=("", 9), cursor="hand2")
+            cb.grid(row=i // 2, column=i % 2, sticky="w", padx=(0, 20), pady=3)
+            if key == "egg":
+                cb.config(command=self._on_egg_toggle)
+
+        self.chk_hr = self._toggles_vars["hr"]
+        self.chk_batt = self._toggles_vars["battery"]
+        self.chk_media = self._toggles_vars["media"]
+        self.chk_extremes = self._toggles_vars["extremes"]
+        self.chk_egg = self._toggles_vars["egg"]
+
+        if not HAS_MEDIA:
+            tk.Label(card, text="(Win only)", bg=BG_CARD, fg=TEXT_GRAY, font=("", 7)).grid(row=0, column=2, sticky="w")
+
+        # reset extremes
+        reset_btn = tk.Button(card, text="Reset Min/Max", font=("", 8),
+                              bg=BG_MID, fg=TEXT_GRAY, bd=0, padx=10, pady=2,
+                              activebackground=BG_CARD, activeforeground=ACCENT_LIGHT,
+                              cursor="hand2", command=self._reset_extremes)
+        reset_btn.grid(row=2, column=0, columnspan=2, pady=(8, 0), sticky="w")
+
+    # ── page: log ─────────────────────────────────────────────
+    def _build_log_page(self, page):
+        card = self._card(page, "Activity Log")
+        self.log = tk.Text(card, bg=BG_INPUT, fg=TEXT_GRAY, font=("Consolas", 9),
+                           bd=0, highlightthickness=1, highlightbackground=BG_MID,
+                           highlightcolor=ACCENT, height=18, width=56, wrap="word")
+        self.log.pack(fill="both", expand=True, pady=(6, 0))
         self.log.insert("end", "Ready \u2014 press Start to begin.\n")
-        self.log.see("end")
+        self.log.config(state="disabled")
 
+    # ── dev panel ─────────────────────────────────────────────
+    def _dev_build(self, page, cfg):
+        self.dev_frame = tk.Frame(page, bg=BG_CARD, padx=10, pady=6)
+        self.dev_frame.pack(fill="x", pady=(6, 0))
+        self.dev_frame.pack_forget()  # hidden until unlocked
+
+        tk.Label(self.dev_frame, text="\u2699 Dev Options", bg=BG_CARD, fg=ACCENT_LIGHT,
+                 font=("", 9, "bold")).pack(anchor="w")
+
+        grid = tk.Frame(self.dev_frame, bg=BG_CARD)
+        grid.pack(fill="x", pady=(4, 0))
+
+        fields = [
+            ("Poll (s)", "poll_interval", 3),
+            ("Keepalive (s)", "keepalive_interval", 30),
+            ("OSC Host", "osc_host", "127.0.0.1"),
+            ("Port", "osc_port", 9000),
+        ]
+        self._dev_vars = {}
+        for i, (label, key, default) in enumerate(fields):
+            tk.Label(grid, text=label, bg=BG_CARD, fg=TEXT_GRAY, font=("", 8)).grid(row=i // 2, column=(i % 2) * 2, sticky="w", padx=(0, 4))
+            if isinstance(default, int):
+                var = tk.IntVar(value=cfg.get(key, default))
+                w = tk.Spinbox(grid, from_=5 if "keepalive" in key else 1,
+                               to=120 if "keepalive" in key else (10 if "poll" in key else 65535),
+                               textvariable=var, bg=BG_INPUT, fg=TEXT_WHITE, bd=0,
+                               highlightthickness=1, highlightbackground=BG_MID,
+                               highlightcolor=ACCENT, width=6, buttonbackground=BG_MID)
+            elif isinstance(default, float):
+                var = tk.DoubleVar(value=cfg.get(key, default))
+                w = tk.Spinbox(grid, from_=1, to=10, increment=0.5, textvariable=var,
+                               bg=BG_INPUT, fg=TEXT_WHITE, bd=0, highlightthickness=1,
+                               highlightbackground=BG_MID, highlightcolor=ACCENT, width=6,
+                               buttonbackground=BG_MID)
+            else:
+                var = tk.StringVar(value=cfg.get(key, default))
+                w = tk.Entry(grid, textvariable=var, bg=BG_INPUT, fg=TEXT_WHITE, bd=0,
+                             highlightthickness=1, highlightbackground=BG_MID,
+                             highlightcolor=ACCENT, width=14)
+            self._dev_vars[key] = var
+            w.grid(row=i // 2, column=(i % 2) * 2 + 1, sticky="w", padx=(0, 16), pady=2)
+
+    def _show_dev(self):
+        self.dev_frame.pack(fill="x", pady=(6, 0))
+
+    # ── helpers ───────────────────────────────────────────────
     def _reset_extremes(self):
         if self.bridge:
             self.bridge.reset_hr_extremes()
@@ -379,38 +543,31 @@ class App(ttk.Frame):
         txt = self.egg_txt.get().strip().lower()
         if txt in BLANK_EGG_SECRETS and not self.egg_dev:
             self.egg_dev = True
-            self.dev_frame.grid()
-            self.write_log("  \U0001f3eb BlankEgg Dev Mode unlocked!")
+            self._show_dev()
+            self._write_log("  \U0001f3eb BlankEgg Dev Mode unlocked!")
             from tkinter import messagebox
             messagebox.showinfo("\U0001f3eb Egg", "u found the dev egggmoooodeee go to dev options")
-        elif txt not in BLANK_EGG_SECRETS and self.egg_dev:
-            pass
 
     def _on_egg_toggle(self):
         mode = self.chk_egg.get()
         state = "normal" if mode else "disabled"
-        for child in self.egg_frame.winfo_children():
-            child.configure(state=state)
-        for child in self.template_frame.winfo_children():
-            child.configure(state="disabled" if mode else "normal")
-        if mode and self.egg_dev:
-            self.dev_frame.grid()
-        elif not mode:
-            pass
+        self._egg_entry.configure(state=state)
+        self._template_entry.configure(state="disabled" if mode else "normal")
 
-    # ── logging ──────────────────────────────────────────────
-    def write_log(self, msg):
-        self.root.after(0, self._insert_log, msg)
-
-    def _insert_log(self, msg):
+    def _write_log(self, msg):
+        self.log.config(state="normal")
         self.log.insert("end", msg + "\n")
         self.log.see("end")
+        self.log.config(state="disabled")
 
-    # ── toggle ───────────────────────────────────────────────
+    def write_log(self, msg):
+        self.after(0, self._write_log, msg)
+
+    # ── toggle bridge ─────────────────────────────────────────
     def _toggle(self):
         if self.bridge and self.bridge.running:
             self.bridge.stop()
-            self.btn.config(text="\u25b6 Start")
+            self.btn.config(text="\u25b6  Start", bg=SUCCESS)
             save_config({
                 "address": self.addr.get(),
                 "template": self.template.get(),
@@ -421,17 +578,19 @@ class App(ttk.Frame):
                 "egg": self.chk_egg.get(),
                 "egg_text": self.egg_txt.get(),
                 "blank_egg": self.egg_dev,
-                "poll_interval": self.dev_poll.get() if self.egg_dev else 3,
-                "keepalive_interval": self.dev_keepalive.get() if self.egg_dev else 30,
-                "osc_host": self.dev_osc_host.get() if self.egg_dev else "127.0.0.1",
-                "osc_port": self.dev_osc_port.get() if self.egg_dev else 9000,
+                "poll_interval": self._dev_vars["poll_interval"].get() if self.egg_dev else 3,
+                "keepalive_interval": self._dev_vars["keepalive_interval"].get() if self.egg_dev else 30,
+                "osc_host": self._dev_vars["osc_host"].get() if self.egg_dev else "127.0.0.1",
+                "osc_port": self._dev_vars["osc_port"].get() if self.egg_dev else 9000,
             })
         else:
+            self.log.config(state="normal")
             self.log.delete("1.0", "end")
-            poll = self.dev_poll.get() if self.egg_dev else 3
-            ka = self.dev_keepalive.get() if self.egg_dev else 30
-            host = self.dev_osc_host.get() if self.egg_dev else "127.0.0.1"
-            port = self.dev_osc_port.get() if self.egg_dev else 9000
+            self.log.config(state="disabled")
+            poll = self._dev_vars["poll_interval"].get() if self.egg_dev else 3
+            ka = self._dev_vars["keepalive_interval"].get() if self.egg_dev else 30
+            host = self._dev_vars["osc_host"].get() if self.egg_dev else "127.0.0.1"
+            port = self._dev_vars["osc_port"].get() if self.egg_dev else 9000
             self.bridge = HRBridge(
                 address=self.addr.get(),
                 template=self.template.get(),
@@ -448,15 +607,13 @@ class App(ttk.Frame):
                 osc_port=port,
             )
             self.bridge.start()
-            self.btn.config(text="\u25a0 Stop")
+            self.btn.config(text="\u25a0  Stop", bg=DANGER)
 
     def _on_close(self):
         if self.bridge and self.bridge.running:
             self.bridge.stop()
-        self.root.destroy()
+        self.destroy()
 
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    App(root)
-    root.mainloop()
+    App().mainloop()
