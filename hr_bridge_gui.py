@@ -442,7 +442,12 @@ class App(tk.Tk):
 
     # ── page: features ────────────────────────────────────────
     def _build_features_page(self, page, cfg):
-        card = self._card(page, "Toggles")
+        card = tk.Frame(page, bg=BG_CARD, padx=10, pady=8)
+        card.pack(fill="x")
+        tk.Label(card, text="Toggles", bg=BG_CARD, fg=ACCENT_LIGHT, font=("", 9, "bold"), anchor="w").pack(fill="x")
+
+        body = tk.Frame(card, bg=BG_CARD)
+        body.pack(fill="x", pady=(6, 0))
 
         toggles_data = [
             ("\u2764  Heart Rate", "hr", True),
@@ -455,11 +460,11 @@ class App(tk.Tk):
         for i, (label, key, default) in enumerate(toggles_data):
             var = tk.BooleanVar(value=cfg.get(key, default))
             self._toggles_vars[key] = var
-            cb = tk.Checkbutton(card, text=label, variable=var,
+            cb = tk.Checkbutton(body, text=label, variable=var,
                                 bg=BG_CARD, fg=TEXT_WHITE, selectcolor=BG_INPUT,
                                 activebackground=BG_CARD, activeforeground=TEXT_WHITE,
                                 font=("", 9), cursor="hand2")
-            cb.grid(row=i // 2, column=i % 2, sticky="w", padx=(0, 20), pady=3)
+            cb.pack(side="left", padx=(0, 12), pady=2)
             if key == "egg":
                 cb.config(command=self._on_egg_toggle)
 
@@ -470,14 +475,14 @@ class App(tk.Tk):
         self.chk_egg = self._toggles_vars["egg"]
 
         if not HAS_MEDIA:
-            tk.Label(card, text="(Win only)", bg=BG_CARD, fg=TEXT_GRAY, font=("", 7)).grid(row=0, column=2, sticky="w")
+            tk.Label(body, text="(Win only)", bg=BG_CARD, fg=TEXT_GRAY, font=("", 7)).pack(side="left")
 
         # reset extremes
         reset_btn = tk.Button(card, text="Reset Min/Max", font=("", 8),
                               bg=BG_MID, fg=TEXT_GRAY, bd=0, padx=10, pady=2,
                               activebackground=BG_CARD, activeforeground=ACCENT_LIGHT,
                               cursor="hand2", command=self._reset_extremes)
-        reset_btn.grid(row=2, column=0, columnspan=2, pady=(8, 0), sticky="w")
+        reset_btn.pack(anchor="w", pady=(6, 0))
 
     # ── page: log ─────────────────────────────────────────────
     def _build_log_page(self, page):
