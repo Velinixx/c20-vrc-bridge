@@ -59,7 +59,21 @@ if HAS_WINRT:
             if s is None:
                 return None
             info = await s.try_get_media_properties_async()
-            return {"title": info.title or "", "artist": info.artist or ""}
+            result = {"title": info.title or "", "artist": info.artist or ""}
+            try:
+                tl = s.get_timeline_properties()
+                p = tl.position
+                e = tl.end_time
+                # winrt TimeSpan: .duration is 100ns ticks, or use total_seconds if available
+                try:
+                    result["position"] = max(0, int(p.total_seconds()))
+                    result["duration"] = max(0, int(e.total_seconds()))
+                except:
+                    result["position"] = max(0, int(p.duration / 1e7))
+                    result["duration"] = max(0, int(e.duration / 1e7))
+            except:
+                pass
+            return result
         except:
             return None
 else:
@@ -107,6 +121,8 @@ class HRBridge:
         self.running = False
         self.song = ""
         self.artist = ""
+        self.media_position = 0
+        self.media_duration = 0
         self._client = None
         self.bpm_history = []
         self._pulse = 0.0
@@ -131,8 +147,19 @@ class HRBridge:
                 media_parts.append(self.artist)
             media_str = " — ".join(media_parts) if media_parts else ""
             text = text.replace("{song}", media_str).replace("{artist}", self.artist).replace("{title}", self.song)
+            # media progress
+            dur = self.media_duration
+            pos = self.media_position
+            if dur > 0:
+                prog = pos / dur
+                text = text.replace("{media_progress}", f"{prog:.2f}")
+            else:
+                text = text.replace("{media_progress}", "0")
+            text = text.replace("{media_position}", f"{pos // 60:02d}:{pos % 60:02d}")
+            text = text.replace("{media_duration}", f"{dur // 60:02d}:{dur % 60:02d}")
         else:
             text = text.replace("{song}", "").replace("{artist}", "").replace("{title}", "")
+            text = text.replace("{media_progress}", "0").replace("{media_position}", "00:00").replace("{media_duration}", "00:00")
         return " ".join(text.split()).strip()
 
     def _log_line(self):
@@ -156,6 +183,12 @@ class HRBridge:
         self.osc.send_message("/avatar/parameters/HRBatteryFloat", self.battery / 100.0)
         self.osc.send_message("/avatar/parameters/HRMin", int(self.hr_min if self.hr_min != 999 else self.bpm))
         self.osc.send_message("/avatar/parameters/HRMax", int(self.hr_max))
+        if self.show_media:
+            dur = self.media_duration
+            if dur > 0:
+                self.osc.send_message("/avatar/parameters/MediaProgress", min(self.media_position / dur, 1.0))
+            else:
+                self.osc.send_message("/avatar/parameters/MediaProgress", 0.0)
         if chat and not self.paused:
             self.osc.send_message("/chatbox/input", [chat, True])
         self._log_line()
@@ -247,6 +280,8 @@ class HRBridge:
                     if media:
                         self.song = media.get("title", "")
                         self.artist = media.get("artist", "")
+                        self.media_position = media.get("position", 0)
+                        self.media_duration = media.get("duration", 0)
             self.log_msg("  \u26a0\ufe0f Disconnected")
 
     async def run_hyperate(self):
@@ -285,6 +320,8 @@ class HRBridge:
                         if media:
                             self.song = media.get("title", "")
                             self.artist = media.get("artist", "")
+                            self.media_position = media.get("position", 0)
+                            self.media_duration = media.get("duration", 0)
                         last_media = now
             self.log_msg("  \u26a0\ufe0f Disconnected from HypeRate")
 
@@ -656,14 +693,14 @@ class App(tk.Tk):
         self._template_entry.pack(fill="x", pady=(6, 2))
         vars_row = tk.Frame(card2, bg=BG_CARD)
         vars_row.pack(fill="x")
-        tk.Label(vars_row, text="{bpm} {hr_min} {hr_max} {battery} {song} {artist} {title}",
+        tk.Label(vars_row, text="{bpm} {hr_min} {hr_max} {battery} {song} {artist} {title} {media_progress} {media_position} {media_duration}",
                  bg=BG_CARD, fg=TEXT_GRAY, font=("", 7)).pack(side="left")
-        self._qbtn(vars_row, "Variables you can use:\n{bpm} - heart rate\n{hr_min} / {hr_max} - min/max\n{battery} - battery %\n{song} / {artist} / {title} - media\nExample: ❤ {bpm} BPM | 🔋 {battery}%")
+        self._qbtn(vars_row, "Variables you can use:\n{bpm} - heart rate\n{hr_min} / {hr_max} - min/max\n{battery} - battery %\n{song} / {artist} / {title} - media\n{media_progress} - 0.00-1.00 position\n{media_position} - mm:ss\n{media_duration} - mm:ss\nExample: ❤ {bpm} BPM | 🔋 {battery}%")
 
         # template builder buttons
         btn_row = tk.Frame(card2, bg=BG_CARD)
         btn_row.pack(fill="x", pady=(2, 0))
-        for t in ("{bpm}", "{hr_min}", "{hr_max}", "{battery}", "{song}", "{artist}", "{title}"):
+        for t in ("{bpm}", "{hr_min}", "{hr_max}", "{battery}", "{song}", "{artist}", "{title}", "{media_progress}", "{media_position}", "{media_duration}"):
             b = tk.Button(btn_row, text=t, font=("Consolas", 7), bg=BG_MID, fg=TEXT_WHITE,
                           bd=0, padx=4, cursor="hand2", command=lambda t=t: self._insert_template(t))
             b.pack(side="left", padx=(0, 2))
