@@ -462,8 +462,11 @@ def load_config():
         return {}
 
 def save_config(data):
-    with open(CONFIG_PATH, "w") as f:
-        json.dump(data, f)
+    try:
+        with open(CONFIG_PATH, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        print(f"[save_config] Failed to save config: {e}", flush=True)
 
 
 # ── HR History ────────────────────────────────────────────────
@@ -1013,7 +1016,12 @@ class App(tk.Tk):
         """Save config + sync template/toggles to running bridge instantly."""
         if not hasattr(self, "template"):
             return
-        save_config(self._gather_config())
+        if not hasattr(self, "chk_hr") or not hasattr(self, "chk_batt"):
+            return
+        try:
+            save_config(self._gather_config())
+        except Exception as e:
+            print(f"[live_sync] save error: {e}", flush=True)
         if self.bridge and self.bridge.running:
             self.bridge.template = self.template.get()
             self.bridge.status_text = self.egg_txt.get()
@@ -1471,7 +1479,10 @@ class App(tk.Tk):
             self._pause_btn.config(text="\u23f8  Pause", bg=BG_MID, fg=TEXT_WHITE)
 
     def _on_close(self):
-        save_config(self._gather_config())
+        try:
+            save_config(self._gather_config())
+        except Exception as e:
+            print(f"[_on_close] save error: {e}", flush=True)
         if self.bridge and self.bridge.running:
             self.bridge.stop()
         self.destroy()
