@@ -2,6 +2,7 @@
 """C20 Smartwatch → VRChat OSC Heart Rate Bridge — GUI Edition."""
 import asyncio
 import json
+import math
 import os
 import platform
 import threading
@@ -89,9 +90,32 @@ def get_pear_media_sync(port):
             if not data:
                 return None
             author = (data.get("author") or {}).get("name", "") if isinstance(data.get("author"), dict) else (data.get("artist") or "")
-            return {"title": data.get("title", "") or "", "artist": author or ""}
+            return {
+                "title": data.get("title", "") or "",
+                "artist": author or "",
+                "position": data.get("elapsedSeconds", 0) or 0,
+                "duration": data.get("songDuration", 0) or 0,
+                "isPaused": data.get("isPaused", False) or False,
+            }
     except Exception:
         return None
+
+
+def pear_seek_to(port, seconds):
+    """Seek Pear Desktop to a specific position in seconds."""
+    try:
+        body = json.dumps({"seconds": seconds}).encode()
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/v1/seek-to",
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=3):
+            pass
+        return True
+    except Exception:
+        return False
 
 
 # ── System Stats ──────────────────────────────────────────────
@@ -178,6 +202,7 @@ class HRBridge:
         self.artist = ""
         self.media_position = 0
         self.media_duration = 0
+        self.media_is_paused = False
         self._client = None
         self.bpm_history = []
         self.cpu = 0
@@ -216,9 +241,10 @@ class HRBridge:
                 text = text.replace("{media_progress}", "0")
             text = text.replace("{media_position}", f"{pos // 60:02d}:{pos % 60:02d}")
             text = text.replace("{media_duration}", f"{dur // 60:02d}:{dur % 60:02d}")
+            text = text.replace("{media_is_paused}", str(self.media_is_paused).lower())
         else:
             text = text.replace("{song}", "").replace("{artist}", "").replace("{title}", "")
-            text = text.replace("{media_progress}", "0").replace("{media_position}", "00:00").replace("{media_duration}", "00:00")
+            text = text.replace("{media_progress}", "0").replace("{media_position}", "00:00").replace("{media_duration}", "00:00").replace("{media_is_paused}", "false")
         if self.show_system_stats:
             text = text.replace("{cpu}", str(self.cpu))
             text = text.replace("{ram}", str(self.ram))
@@ -256,6 +282,7 @@ class HRBridge:
                 self.osc.send_message("/avatar/parameters/MediaProgress", min(self.media_position / dur, 1.0))
             else:
                 self.osc.send_message("/avatar/parameters/MediaProgress", 0.0)
+            self.osc.send_message("/avatar/parameters/MediaIsPaused", self.media_is_paused)
         if self.show_system_stats:
             self.osc.send_message("/avatar/parameters/CPU", self.cpu)
             self.osc.send_message("/avatar/parameters/CPUFloat", self.cpu / 100.0)
@@ -364,6 +391,7 @@ class HRBridge:
                         self.artist = media.get("artist", "")
                         self.media_position = media.get("position", 0)
                         self.media_duration = media.get("duration", 0)
+                        self.media_is_paused = media.get("isPaused", False)
             self.log_msg("  \u26a0\ufe0f Disconnected")
 
     async def run_hyperate(self):
@@ -404,6 +432,7 @@ class HRBridge:
                             self.artist = media.get("artist", "")
                             self.media_position = media.get("position", 0)
                             self.media_duration = media.get("duration", 0)
+                            self.media_is_paused = media.get("isPaused", False)
                         last_media = now
             self.log_msg("  \u26a0\ufe0f Disconnected from HypeRate")
 
@@ -453,6 +482,12 @@ class HRBridge:
 
 # ── Config ──────────────────────────────────────────────────
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bridge_config.json")
+
+DEFAULT_PRESETS = {
+    "Minimal": "\u2764\ufe0f {bpm} BPM",
+    "Full Stats": "\u2764\ufe0f {bpm} BPM  \U0001f7e2 {hr_min}\u2194{hr_max}  \U0001f50b {battery}%  \U0001f3b5 {title}",
+    "Velinix": "\u2764\ufe0f BPM:{bpm} Highest:{hr_max} Lowest:{hr_min} \U0001f3b5 Listening to:{title} by {artist}",
+}
 
 def load_config():
     try:
@@ -512,9 +547,15 @@ TEXT_WHITE  = "#f0eefe"
 TEXT_GRAY   = "#a8a0c8"
 SUCCESS     = "#4ade80"
 DANGER      = "#ef4444"
-GRADIENT_MODE = "off"
-GRADIENT_FROM = "#1a1a2e"
-GRADIENT_TO   = "#7c5cbf"
+DEFAULT_GRADIENT = {
+    "type": "linear",
+    "angle": 180,
+    "stops": [
+        {"color": "#1a1a2e", "position": 0},
+        {"color": "#7c5cbf", "position": 100},
+    ],
+}
+GRADIENT_CFG = dict(DEFAULT_GRADIENT)
 
 def _hex_to_rgb(h):
     h = h.lstrip("#")
@@ -528,18 +569,49 @@ def _lerp_color(a, b, t):
     br, bg, bb = _hex_to_rgb(b)
     return _rgb_to_hex(ar + (br - ar) * t, ag + (bg - ag) * t, ab + (bb - ab) * t)
 
+def _gradient_color(t, stops):
+    """Sample a multi-stop gradient at t (0–1). stops = [{color, position}, …] with pos 0–100."""
+    if not stops:
+        return "#000000"
+    if len(stops) == 1:
+        return stops[0]["color"]
+    s = sorted(stops, key=lambda x: x["position"])
+    if t <= s[0]["position"] / 100:
+        return s[0]["color"]
+    if t >= s[-1]["position"] / 100:
+        return s[-1]["color"]
+    for i in range(len(s) - 1):
+        p0 = s[i]["position"] / 100
+        p1 = s[i + 1]["position"] / 100
+        if p0 <= t <= p1:
+            lt = (t - p0) / (p1 - p0)
+            return _lerp_color(s[i]["color"], s[i + 1]["color"], lt)
+    return s[-1]["color"]
+
+def _gradient_css(grad):
+    """Build CSS gradient string from config dict."""
+    if not grad or not grad.get("stops"):
+        return "none"
+    stops = sorted(grad["stops"], key=lambda x: x["position"])
+    parts = [f"{s['color']} {s['position']}%" for s in stops]
+    if grad.get("type") == "radial":
+        return f"radial-gradient(circle at center, {', '.join(parts)})"
+    else:
+        angle = grad.get("angle", 180)
+        return f"linear-gradient({angle}deg, {', '.join(parts)})"
+
 def apply_palette(cfg):
-    global BG_DARK, BG_MID, BG_CARD, BG_INPUT, ACCENT, ACCENT_LIGHT, TEXT_WHITE, TEXT_GRAY, GRADIENT_MODE, GRADIENT_FROM, GRADIENT_TO
+    global BG_DARK, BG_MID, BG_CARD, BG_INPUT, ACCENT, ACCENT_LIGHT, TEXT_WHITE, TEXT_GRAY, GRADIENT_CFG
     m = {"bg_dark": "BG_DARK", "bg_mid": "BG_MID", "bg_card": "BG_CARD", "bg_input": "BG_INPUT",
          "accent": "ACCENT", "accent_light": "ACCENT_LIGHT", "text_white": "TEXT_WHITE", "text_gray": "TEXT_GRAY"}
     for key, gname in m.items():
         val = cfg.get(f"color_{key}")
         if val:
             globals()[gname] = val
-    GRADIENT_MODE = cfg.get("gradient_mode", "off")
-    if GRADIENT_MODE != "off":
-        GRADIENT_FROM = cfg.get("gradient_from", GRADIENT_FROM)
-        GRADIENT_TO = cfg.get("gradient_to", GRADIENT_TO)
+    g = cfg.get("gradient")
+    if g and isinstance(g, dict):
+        GRADIENT_CFG.clear()
+        GRADIENT_CFG.update(g)
 
 def setup_style():
     style = ttk.Style()
@@ -561,6 +633,7 @@ def setup_style():
     style.configure("Success.TButton", background=SUCCESS, foreground="#000000")
     style.map("Success.TButton", background=[("active", "#6ee7a0")])
     style.configure("Danger.TButton", background=DANGER, foreground=TEXT_WHITE)
+    style.configure("green.Horizontal.TProgressbar", background=ACCENT, troughcolor=BG_MID, bordercolor=BG_CARD, lightcolor=ACCENT_LIGHT, darkcolor=ACCENT)
     style.map("Danger.TButton", background=[("active", "#f87171")])
     style.configure("TScrollbar", background=BG_MID, troughcolor=BG_DARK, bordercolor=BG_MID, arrowcolor=TEXT_GRAY)
 
@@ -759,6 +832,20 @@ class App(tk.Tk):
     # ── page: status ──────────────────────────────────────────
     def _build_status_page(self, page, cfg):
         self._build_bpm_display(page)
+        # media seek bar
+        self._seek_frame = tk.Frame(page, bg=BG_CARD, padx=10, pady=4)
+        self._seek_frame.pack(fill="x", pady=(0, 2))
+        self._seek_lbl = tk.Label(self._seek_frame, text="\U0001f3b5  —:— / —:—",
+                                  bg=BG_CARD, fg=TEXT_GRAY, font=("", 8))
+        self._seek_lbl.pack(side="left")
+        self._seek_bar = ttk.Progressbar(self._seek_frame, value=0, length=180,
+                                         mode="determinate", style="green.Horizontal.TProgressbar")
+        self._seek_bar.pack(side="left", padx=(8, 4), fill="x", expand=True)
+        self._seek_btn = tk.Button(self._seek_frame, text="\u25b6\ufe0f", font=("", 9),
+                                   bg=BG_MID, fg=TEXT_WHITE, bd=0, padx=6, cursor="hand2",
+                                   activebackground=BG_CARD, command=self._pear_seek_popup)
+        self._seek_btn.pack(side="left")
+        self._seek_frame.pack_forget()
         # address
         card = self._card(page, "Watch")
         addr_row = tk.Frame(card, bg=BG_CARD)
@@ -778,14 +865,14 @@ class App(tk.Tk):
         self._template_entry.pack(fill="x", pady=(6, 2))
         vars_row = tk.Frame(card2, bg=BG_CARD)
         vars_row.pack(fill="x")
-        tk.Label(vars_row, text="{bpm} {hr_min} {hr_max} {battery} {cpu} {ram} {ram_gb} {song} {artist} {title} {media_progress} {media_position} {media_duration}",
+        tk.Label(vars_row, text="{bpm} {hr_min} {hr_max} {battery} {cpu} {ram} {ram_gb} {song} {artist} {title} {media_progress} {media_position} {media_duration} {media_is_paused}",
                  bg=BG_CARD, fg=TEXT_GRAY, font=("", 7)).pack(side="left")
-        self._qbtn(vars_row, "Variables you can use:\n{bpm} - heart rate\n{hr_min} / {hr_max} - min/max\n{battery} - battery %\n{cpu} - CPU usage %\n{ram} - RAM usage %\n{ram_gb} - RAM used (GB)\n{song} / {artist} / {title} - media\n{media_progress} - 0.00-1.00 position\n{media_position} - mm:ss\n{media_duration} - mm:ss\nExample: ❤ {bpm} BPM | 🔋 {battery}%")
+        self._qbtn(vars_row, "Variables you can use:\n{bpm} - heart rate\n{hr_min} / {hr_max} - min/max\n{battery} - battery %\n{cpu} - CPU usage %\n{ram} - RAM usage %\n{ram_gb} - RAM used (GB)\n{song} / {artist} / {title} - media\n{media_progress} - 0.00-1.00 position\n{media_position} - mm:ss\n{media_duration} - mm:ss\n{media_is_paused} - true/false\nExample: ❤ {bpm} BPM | 🔋 {battery}%")
 
         # template builder buttons
         btn_row = tk.Frame(card2, bg=BG_CARD)
         btn_row.pack(fill="x", pady=(2, 0))
-        for t in ("{bpm}", "{hr_min}", "{hr_max}", "{battery}", "{cpu}", "{ram}", "{ram_gb}", "{song}", "{artist}", "{title}", "{media_progress}", "{media_position}", "{media_duration}"):
+        for t in ("{bpm}", "{hr_min}", "{hr_max}", "{battery}", "{cpu}", "{ram}", "{ram_gb}", "{song}", "{artist}", "{title}", "{media_progress}", "{media_position}", "{media_duration}", "{media_is_paused}"):
             b = tk.Button(btn_row, text=t, font=("Consolas", 7), bg=BG_MID, fg=TEXT_WHITE,
                           bd=0, padx=4, cursor="hand2", command=lambda t=t: self._insert_template(t))
             b.pack(side="left", padx=(0, 2))
@@ -796,6 +883,23 @@ class App(tk.Tk):
             b = tk.Button(emoji_row, text=em, font=("", 8), bg=BG_MID, fg=TEXT_WHITE,
                           bd=0, padx=3, cursor="hand2", command=lambda e=em: self._insert_template(e))
             b.pack(side="left", padx=(0, 2))
+        # presets
+        presets_row = tk.Frame(card2, bg=BG_CARD)
+        presets_row.pack(fill="x", pady=(2, 0))
+        tk.Label(presets_row, text="Preset:", bg=BG_CARD, fg=TEXT_GRAY, font=("", 8)).pack(side="left")
+        presets = self._load_presets(cfg)
+        self._preset_var = tk.StringVar()
+        self._preset_menu = tk.OptionMenu(presets_row, self._preset_var, "")
+        self._preset_menu.config(bg=BG_MID, fg=TEXT_WHITE, bd=0, highlightthickness=0, activebackground=BG_CARD, width=18)
+        self._preset_menu["menu"].config(bg=BG_MID, fg=TEXT_WHITE)
+        self._preset_menu.pack(side="left", padx=(6, 4))
+        self._rebuild_preset_menu(presets)
+        tk.Button(presets_row, text="\u25b6 Load", font=("", 8), bg=BG_MID, fg=TEXT_WHITE, bd=0, padx=8,
+                  cursor="hand2", command=self._load_preset).pack(side="left", padx=(0, 4))
+        tk.Button(presets_row, text="\u2795 Save", font=("", 8), bg=BG_MID, fg=TEXT_WHITE, bd=0, padx=8,
+                  cursor="hand2", command=self._save_preset).pack(side="left", padx=(0, 4))
+        tk.Button(presets_row, text="\u2716 Delete", font=("", 8), bg=BG_MID, fg=TEXT_GRAY, bd=0, padx=6,
+                  cursor="hand2", command=self._delete_preset).pack(side="left")
         self._mirror_egg_var = tk.BooleanVar(value=cfg.get("mirror_egg", False))
         tk.Checkbutton(card2, text="Mirror to egg", variable=self._mirror_egg_var,
                        bg=BG_CARD, fg=TEXT_GRAY, selectcolor=BG_INPUT,
@@ -873,6 +977,7 @@ class App(tk.Tk):
         f = tk.Frame(body, bg=BG_CARD)
         f.pack(side="left", padx=(0, 8), pady=2)
         self._autostart_var = tk.BooleanVar(value=cfg.get("autostart_vrchat", False))
+        self._autostart_var.trace_add("write", self._live_sync)
         tk.Checkbutton(f, text="\U0001f3ae  Auto-start with VRChat", variable=self._autostart_var,
                        bg=BG_CARD, fg=TEXT_WHITE, selectcolor=BG_INPUT,
                        activebackground=BG_CARD, activeforeground=TEXT_WHITE,
@@ -885,6 +990,7 @@ class App(tk.Tk):
         tk.Label(src_row, text="Media Source:", bg=BG_CARD, fg=TEXT_GRAY, font=("", 8)).pack(side="left")
         self._qbtn(src_row, "Source for media info\nnone = off\nwinrt = Windows Runtime (Windows only)\npear = Pear Desktop API")
         self.media_source = tk.StringVar(value=cfg.get("media_source", "none"))
+        self.media_source.trace_add("write", self._live_sync)
         sources = ["none", "winrt", "pear"]
         src_menu = tk.OptionMenu(src_row, self.media_source, *sources)
         src_menu.config(bg=BG_MID, fg=TEXT_WHITE, bd=0, highlightthickness=0, activebackground=BG_CARD)
@@ -895,6 +1001,7 @@ class App(tk.Tk):
         tk.Label(src_row, text="Port:", bg=BG_CARD, fg=TEXT_GRAY, font=("", 8)).pack(side="left", padx=(10, 0))
         self._qbtn(src_row, "Pear Desktop API port\nDefault: 26538")
         self.pear_port = tk.IntVar(value=cfg.get("pear_port", PEAR_DEFAULT_PORT))
+        self.pear_port.trace_add("write", self._live_sync)
         tk.Spinbox(src_row, from_=1024, to=65535, textvariable=self.pear_port, width=6,
                    bg=BG_INPUT, fg=TEXT_WHITE, bd=0, highlightthickness=1,
                    highlightbackground=BG_MID, highlightcolor=ACCENT, buttonbackground=BG_MID).pack(side="left", padx=(4, 0))
@@ -918,6 +1025,7 @@ class App(tk.Tk):
         self._qbtn(hr_body, "Heart rate source\nble = C20 watch via Bluetooth\nhyperate = HypeRate.io WebSocket")
         self.hr_source = tk.StringVar(value=cfg.get("hr_source", "ble"))
         self.hr_source.trace_add("write", self._toggle_hr_fields)
+        self.hr_source.trace_add("write", self._live_sync)
         hr_sources = ["ble"] + (["hyperate"] if HAS_WS else [])
         hr_menu = tk.OptionMenu(hr_body, self.hr_source, *hr_sources)
         hr_menu.config(bg=BG_MID, fg=TEXT_WHITE, bd=0, highlightthickness=0, activebackground=BG_CARD)
@@ -930,6 +1038,7 @@ class App(tk.Tk):
         tk.Label(self.hr_id_frame, text="Device ID:", bg=BG_CARD, fg=TEXT_GRAY, font=("", 8)).pack(side="left")
         self._qbtn(self.hr_id_frame, "HypeRate device ID\nget from hyperate.io dashboard")
         self.hyperate_id = tk.StringVar(value=cfg.get("hyperate_id", ""))
+        self.hyperate_id.trace_add("write", self._live_sync)
         tk.Entry(self.hr_id_frame, textvariable=self.hyperate_id, bg=BG_INPUT, fg=TEXT_WHITE, insertbackground=TEXT_WHITE,
                  bd=0, highlightthickness=1, highlightbackground=BG_MID, highlightcolor=ACCENT, width=18).pack(side="left", padx=(4, 0))
 
@@ -938,6 +1047,7 @@ class App(tk.Tk):
         tk.Label(self.hr_key_frame, text="API Key:", bg=BG_CARD, fg=TEXT_GRAY, font=("", 8)).pack(side="left")
         self._qbtn(self.hr_key_frame, "HypeRate API key\nget from hyperate.io/api")
         self.hyperate_key = tk.StringVar(value=cfg.get("hyperate_key", ""))
+        self.hyperate_key.trace_add("write", self._live_sync)
         tk.Entry(self.hr_key_frame, textvariable=self.hyperate_key, bg=BG_INPUT, fg=TEXT_WHITE, insertbackground=TEXT_WHITE,
                  bd=0, highlightthickness=1, highlightbackground=BG_MID, highlightcolor=ACCENT, width=28, show="*").pack(side="left", padx=(4, 0))
 
@@ -1010,6 +1120,64 @@ class App(tk.Tk):
 
     def _show_dev(self):
         self.dev_frame.pack(fill="x", pady=(6, 0))
+
+    # ── presets ────────────────────────────────────────────────
+    def _load_presets(self, cfg):
+        saved = cfg.get("presets", {})
+        merged = dict(DEFAULT_PRESETS)
+        merged.update(saved)
+        return merged
+
+    def _rebuild_preset_menu(self, presets=None):
+        if presets is None:
+            presets = self._load_presets(load_config())
+        menu = self._preset_menu["menu"]
+        menu.delete(0, "end")
+        names = list(presets.keys())
+        if not names:
+            names = [""]
+        for name in names:
+            menu.add_command(label=name, command=lambda n=name: self._preset_var.set(n))
+        self._preset_var.set(names[0] if names[0] else "")
+
+    def _load_preset(self):
+        name = self._preset_var.get()
+        if not name:
+            return
+        presets = self._load_presets(load_config())
+        if name in presets:
+            self.template.set(presets[name])
+
+    def _save_preset(self):
+        from tkinter import simpledialog
+        name = simpledialog.askstring("Save Preset", "Preset name:", parent=self)
+        if not name or not name.strip():
+            return
+        name = name.strip()
+        cfg = load_config()
+        presets = cfg.get("presets", {})
+        presets[name] = self.template.get()
+        cfg["presets"] = presets
+        save_config(cfg)
+        self._rebuild_preset_menu(self._load_presets(cfg))
+        self._preset_var.set(name)
+
+    def _delete_preset(self):
+        name = self._preset_var.get()
+        if not name:
+            return
+        if name in DEFAULT_PRESETS:
+            self._write_log(f"  \u26a0\ufe0f Cannot delete default preset '{name}'")
+            return
+        from tkinter import messagebox
+        if not messagebox.askyesno("Delete Preset", f"Delete '{name}'?", parent=self):
+            return
+        cfg = load_config()
+        presets = cfg.get("presets", {})
+        presets.pop(name, None)
+        cfg["presets"] = presets
+        save_config(cfg)
+        self._rebuild_preset_menu(self._load_presets(cfg))
 
     # ── helpers ───────────────────────────────────────────────
     def _live_sync(self, *_):
@@ -1149,6 +1317,56 @@ class App(tk.Tk):
                                            fill=TEXT_GRAY, font=("", 8))
 
         self.after(350, self._update_display)
+        self._update_seek_bar()
+
+    def _update_seek_bar(self):
+        if not self.bridge:
+            return
+        src = self.media_source.get() if hasattr(self, "media_source") else "none"
+        if src == "pear" and self.bridge.show_media:
+            self._seek_frame.pack(fill="x", pady=(0, 2))
+            dur = self.bridge.media_duration
+            pos = self.bridge.media_position
+            if dur > 0:
+                prog = min(pos / dur, 1.0)
+                pos_s = f"{int(pos // 60):02d}:{int(pos % 60):02d}"
+                dur_s = f"{int(dur // 60):02d}:{int(dur % 60):02d}"
+            else:
+                prog = 0
+                pos_s = "--:--"
+                dur_s = "--:--"
+            self._seek_lbl.config(text=f"\U0001f3b5  {pos_s} / {dur_s}")
+            self._seek_bar["value"] = prog * 100
+        else:
+            self._seek_frame.pack_forget()
+
+    def _pear_seek_popup(self):
+        win = tk.Toplevel(self)
+        win.title("Seek")
+        win.configure(bg=BG_DARK)
+        win.geometry("260x100")
+        tk.Label(win, text="Seek to position (mm:ss):", bg=BG_DARK, fg=TEXT_WHITE, font=("", 9)).pack(pady=(12, 4))
+        var = tk.StringVar()
+        e = tk.Entry(win, textvariable=var, bg=BG_INPUT, fg=TEXT_WHITE, insertbackground=TEXT_WHITE, bd=0, highlightthickness=1, highlightbackground=BG_MID, width=12)
+        e.pack()
+        e.focus()
+        def do_seek():
+            txt = var.get().strip()
+            try:
+                if ":" in txt:
+                    m, s = txt.split(":")
+                    secs = int(m) * 60 + int(s)
+                else:
+                    secs = int(txt)
+                if self.bridge and self.bridge.media_source == "pear":
+                    ok = pear_seek_to(self.bridge.pear_port, secs)
+                    if ok:
+                        self.bridge.media_position = secs
+            except:
+                pass
+            win.destroy()
+        tk.Button(win, text="Seek", command=do_seek, bg=ACCENT, fg=TEXT_WHITE, bd=0, padx=12, cursor="hand2").pack(pady=(6, 0))
+        win.bind("<Return>", lambda e: do_seek())
 
     def _update_statusbar(self):
         running = self.bridge and self.bridge.running
@@ -1267,21 +1485,46 @@ class App(tk.Tk):
     def _redraw_gradient(self, w, h):
         c = self._body_canvas
         c.delete("gradient")
-        if GRADIENT_MODE == "off":
+        grad = GRADIENT_CFG
+        if not grad.get("stops") or len(grad["stops"]) < 2:
             c.create_rectangle(0, 0, w, h, fill=BG_DARK, outline="", tags="gradient")
             return
         steps = 80
-        if GRADIENT_MODE == "top":
-            gh = min(h, 48)
-            c.create_rectangle(0, gh, w, h, fill=BG_DARK, outline="", tags="gradient")
+        gh = h
+        stops = sorted(grad["stops"], key=lambda x: x["position"])
+        if grad.get("type") == "radial":
+            cx, cy = w / 2, h / 2
+            r_max = max(w, h) / 2
+            for i in range(steps):
+                t = i / steps
+                color = _gradient_color(t, stops)
+                r = r_max * (1 - (steps - i) / steps)
+                c.create_oval(cx - r, cy - r, cx + r, cy + r,
+                              fill=color, outline="", tags="gradient")
         else:
-            gh = h
-        for i in range(steps):
-            t = i / steps
-            color = _lerp_color(GRADIENT_FROM, GRADIENT_TO, t)
-            y1 = int(gh * t)
-            y2 = int(gh * (i + 1) / steps)
-            c.create_rectangle(0, y1, w, y2, fill=color, outline="", tags="gradient")
+            angle = grad.get("angle", 180)
+            rad = math.radians(angle)
+            if abs(rad % math.pi) < 0.01:
+                for i in range(steps):
+                    t = i / steps
+                    color = _gradient_color(t, stops)
+                    y1 = int(gh * t)
+                    y2 = int(gh * (i + 1) / steps)
+                    c.create_rectangle(0, y1, w, y2, fill=color, outline="", tags="gradient")
+            else:
+                diag = math.hypot(w, h)
+                for i in range(steps):
+                    t = i / steps
+                    color = _gradient_color(t, stops)
+                    cx, cy = w / 2, h / 2
+                    offset = (t - 0.5) * diag
+                    dx = offset * math.cos(rad)
+                    dy = offset * math.sin(rad)
+                    x0 = cx + dx - math.cos(rad + math.pi / 2) * diag / 2
+                    y0 = cy + dy - math.sin(rad + math.pi / 2) * diag / 2
+                    x1 = cx + dx + math.cos(rad + math.pi / 2) * diag / 2
+                    y1 = cy + dy + math.sin(rad + math.pi / 2) * diag / 2
+                    c.create_polygon(x0, y0, x1, y1, fill=color, outline="", tags="gradient")
         c.tag_lower("gradient")
 
     def _pick_color(self, var, btn):
@@ -1310,6 +1553,7 @@ class App(tk.Tk):
         self._color_vars = {}
         for col, (cfg_key, label) in enumerate(color_keys):
             var = tk.StringVar(value=cfg.get(f"color_{cfg_key}", fallback[cfg_key]))
+            var.trace_add("write", self._live_sync)
             self._color_vars[cfg_key] = var
             f = tk.Frame(swatch_frame, bg=BG_CARD)
             f.grid(row=0, column=col, padx=(0, 8), sticky="w")
@@ -1323,58 +1567,178 @@ class App(tk.Tk):
             btn = f.winfo_children()[0]
             btn.config(command=lambda v=var, b=btn: self._pick_color(v, b))
 
-        grad_frame = tk.Frame(body, bg=BG_CARD)
-        grad_frame.pack(fill="x", pady=(4, 0))
-        tk.Label(grad_frame, text="Gradient:", bg=BG_CARD, fg=TEXT_GRAY,
-                 font=("", 8)).pack(side="left")
-        self._gradient_var = tk.StringVar(value=cfg.get("gradient_mode", "off"))
-        for gval, glabel in [("off", "Off"), ("top", "Top Bar"), ("full", "Full BG")]:
-            rb = tk.Radiobutton(grad_frame, text=glabel, variable=self._gradient_var,
+        # ── Gradient Editor ──
+        grad_section = tk.Frame(body, bg=BG_CARD, padx=4, pady=4)
+        grad_section.pack(fill="x", pady=(4, 0))
+        tk.Label(grad_section, text="Gradient:", bg=BG_CARD, fg=TEXT_GRAY,
+                 font=("", 8, "bold")).pack(anchor="w")
+
+        grad = cfg.get("gradient", dict(DEFAULT_GRADIENT))
+        self._grad_stops = [dict(s) for s in grad.get("stops", [{"color": "#1a1a2e", "position": 0}, {"color": "#7c5cbf", "position": 100}])]
+        self._grad_type = tk.StringVar(value=grad.get("type", "linear"))
+        self._grad_angle = tk.IntVar(value=grad.get("angle", 180))
+
+        # type + angle row
+        def _on_grad_change(*_):
+            self._grad_dirty = True
+        ta_row = tk.Frame(grad_section, bg=BG_CARD)
+        ta_row.pack(fill="x", pady=(2, 0))
+        for gval, glabel in [("linear", "Linear"), ("radial", "Radial")]:
+            rb = tk.Radiobutton(ta_row, text=glabel, variable=self._grad_type,
                                 value=gval, bg=BG_CARD, fg=TEXT_WHITE, selectcolor=BG_INPUT,
                                 activebackground=BG_CARD, activeforeground=TEXT_WHITE,
-                                font=("", 8), cursor="hand2")
-            rb.pack(side="left", padx=(6, 0))
-        grad_colors = tk.Frame(body, bg=BG_CARD)
-        grad_colors.pack(fill="x", pady=(2, 0))
-        self._grad_from_var = tk.StringVar(value=cfg.get("gradient_from", GRADIENT_FROM))
-        self._grad_to_var = tk.StringVar(value=cfg.get("gradient_to", GRADIENT_TO))
-        for gvar, glabel in ((self._grad_from_var, "From"), (self._grad_to_var, "To")):
-            f = tk.Frame(grad_colors, bg=BG_CARD)
-            f.pack(side="left", padx=(0, 8))
-            btn = tk.Button(f, text="  ", bg=gvar.get(), bd=1, relief="solid",
-                            width=2, cursor="hand2")
-            btn.pack(side="left")
-            btn.config(command=lambda v=gvar, b=btn: self._pick_color(v, b))
-            tk.Label(f, text=glabel, bg=BG_CARD, fg=TEXT_GRAY, font=("", 7)).pack(side="left", padx=(3, 0))
-        # preview button
-        preview_btn = tk.Button(grad_colors, text="\U0001f441", width=2,
-                                bg=BG_CARD, fg=TEXT_WHITE, bd=1, relief="solid",
-                                cursor="hand2", command=self._gradient_preview)
-        preview_btn.pack(side="right")
-        tk.Label(body, text="Restart to apply theme changes", bg=BG_CARD, fg=TEXT_GRAY,
-                 font=("", 7, "italic")).pack(anchor="w", pady=(2, 0))
+                                font=("", 8), cursor="hand2", command=_on_grad_change)
+            rb.pack(side="left", padx=(0, 6))
+        tk.Label(ta_row, text="Angle:", bg=BG_CARD, fg=TEXT_GRAY, font=("", 8)).pack(side="left", padx=(10, 2))
+        tk.Spinbox(ta_row, from_=0, to=360, textvariable=self._grad_angle, width=4,
+                   bg=BG_INPUT, fg=TEXT_WHITE, bd=0, highlightthickness=1,
+                   highlightbackground=BG_MID, highlightcolor=ACCENT, buttonbackground=BG_MID,
+                   command=_on_grad_change).pack(side="left")
 
-    def _gradient_preview(self):
+        # color stops
+        stops_frame = tk.Frame(grad_section, bg=BG_CARD)
+        stops_frame.pack(fill="x", pady=(2, 0))
+        self._grad_stops_ui = []
+        def _rebuild_stops():
+            for w in self._grad_stops_ui:
+                for child in w.winfo_children():
+                    child.destroy()
+                w.destroy()
+            self._grad_stops_ui.clear()
+            for i, s in enumerate(self._grad_stops):
+                sf = tk.Frame(stops_frame, bg=BG_CARD)
+                sf.pack(fill="x", pady=(1, 0))
+                self._grad_stops_ui.append(sf)
+                color_var = tk.StringVar(value=s["color"])
+                pos_var = tk.IntVar(value=s["position"])
+                def make_setters(idx, cv, pv):
+                    def set_color():
+                        result = tkc.askcolor(color=cv.get(), title="Stop Color", parent=self)
+                        if result and result[1]:
+                            cv.set(result[1])
+                            self._grad_stops[idx]["color"] = result[1]
+                            self._apply_gradient()
+                    def set_pos(*_):
+                        self._grad_stops[idx]["position"] = pv.get()
+                        self._apply_gradient()
+                    pv.trace_add("write", lambda *_: (_on_grad_change(), self._apply_gradient()))
+                    return set_color, set_pos
+                set_color, set_pos = make_setters(i, color_var, pos_var)
+                swatch = tk.Button(sf, text="  ", bg=s["color"], bd=1, relief="solid",
+                                   width=2, cursor="hand2", command=set_color)
+                swatch.pack(side="left")
+                tk.Label(sf, text="Pos:", bg=BG_CARD, fg=TEXT_GRAY, font=("", 7)).pack(side="left", padx=(3, 0))
+                tk.Spinbox(sf, from_=0, to=100, textvariable=pos_var, width=4,
+                           bg=BG_INPUT, fg=TEXT_WHITE, bd=0, highlightthickness=1,
+                           highlightbackground=BG_MID, highlightcolor=ACCENT, buttonbackground=BG_MID).pack(side="left")
+                if len(self._grad_stops) > 2:
+                    def make_del(idx):
+                        def do_del():
+                            self._grad_stops.pop(idx)
+                            _rebuild_stops()
+                            self._apply_gradient()
+                        return do_del
+                    tk.Button(sf, text="\u2716", font=("", 7), bg=BG_MID, fg=TEXT_GRAY, bd=0,
+                              padx=3, cursor="hand2", command=make_del(i)).pack(side="left", padx=(4, 0))
+        _rebuild_stops()
+
+        # add stop + reset buttons
+        btn_row = tk.Frame(grad_section, bg=BG_CARD)
+        btn_row.pack(fill="x", pady=(2, 0))
+        tk.Button(btn_row, text="+ Add Stop", font=("", 8), bg=BG_MID, fg=TEXT_WHITE, bd=0, padx=8,
+                  cursor="hand2", command=lambda: (
+                      self._grad_stops.append({"color": "#7c5cbf", "position": 50}),
+                      _rebuild_stops(), self._apply_gradient()
+                  )).pack(side="left", padx=(0, 6))
+        tk.Button(btn_row, text="\U0001f441 Preview", font=("", 8), bg=BG_MID, fg=TEXT_WHITE, bd=0, padx=8,
+                  cursor="hand2", command=self._gradient_preview_new).pack(side="left", padx=(0, 6))
+        tk.Button(btn_row, text="Reset", font=("", 8), bg=BG_MID, fg=TEXT_GRAY, bd=0, padx=8,
+                  cursor="hand2", command=lambda: (
+                      setattr(self, "_grad_stops", [dict(s) for s in DEFAULT_GRADIENT["stops"]]),
+                      self._grad_type.set(DEFAULT_GRADIENT["type"]),
+                      self._grad_angle.set(DEFAULT_GRADIENT["angle"]),
+                      _rebuild_stops(), self._apply_gradient()
+                  )).pack(side="left")
+
+        self._grad_dirty = False
+        self._apply_gradient = self._make_gradient_applier()
+        # live preview label
+        self._grad_preview_lbl = tk.Label(grad_section, text="\u25cf Gradient active", bg=BG_CARD,
+                                          fg=SUCCESS, font=("", 7))
+        self._grad_preview_lbl.pack(anchor="w", pady=(2, 0))
+
+    def _make_gradient_applier(self):
+        def apply():
+            grad = {
+                "type": self._grad_type.get(),
+                "angle": self._grad_angle.get(),
+                "stops": [{"color": s["color"], "position": s["position"]} for s in self._grad_stops],
+            }
+            global GRADIENT_CFG
+            GRADIENT_CFG.clear()
+            GRADIENT_CFG.update(grad)
+            self._live_sync()
+            w = self._body_canvas.winfo_width() or 600
+            h = self._body_canvas.winfo_height() or 400
+            self._redraw_gradient(w, h)
+            # tint page backgrounds from gradient
+            stops = sorted(grad.get("stops", []), key=lambda x: x["position"])
+            if stops:
+                mid = _gradient_color(0.5, stops)
+                for p in self._pages:
+                    p.configure(bg=mid)
+                self._content_frame.configure(bg=mid)
+            css = _gradient_css(grad)
+            if css != "none":
+                self._grad_preview_lbl.config(text=f"\u25cf {css[:50]}\u2026" if len(css) > 50 else f"\u25cf {css}", fg=SUCCESS)
+            else:
+                self._grad_preview_lbl.config(text="\u25cf Gradient active", fg=SUCCESS)
+        return apply
+
+    def _gradient_preview_new(self):
         top = tk.Toplevel(self)
         top.title("Gradient Preview")
-        top.geometry("300x200")
+        top.geometry("360x280")
         top.configure(bg=BG_DARK)
         top.resizable(False, False)
-        from_ = self._grad_from_var.get()
-        to_ = self._grad_to_var.get()
-        canvas = tk.Canvas(top, width=280, height=160, highlightthickness=0, bg=from_)
+        grad = {
+            "type": self._grad_type.get(),
+            "angle": self._grad_angle.get(),
+            "stops": [{"color": s["color"], "position": s["position"]} for s in self._grad_stops],
+        }
+        canvas = tk.Canvas(top, width=340, height=180, highlightthickness=0, bg=BG_DARK)
         canvas.pack(padx=10, pady=(10, 4))
-        steps = 80
-        for i in range(steps):
-            t = i / steps
-            color = _lerp_color(from_, to_, t)
-            y1 = int(160 * t)
-            y2 = int(160 * (i + 1) / steps)
-            canvas.create_rectangle(0, y1, 280, y2, fill=color, outline="")
-        canvas.create_text(140, 80, text="C20  →  VRChat Bridge",
-                           fill="white", font=("", 12, "bold"))
-        info = tk.Label(top, text=f"{from_}  →  {to_}", bg=BG_DARK, fg=TEXT_GRAY, font=("", 8))
-        info.pack()
+        steps = 100
+        cw, ch = 340, 180
+        if grad["type"] == "radial":
+            cx, cy = cw / 2, ch / 2
+            r_max = max(cw, ch) / 2
+            for i in range(steps):
+                t = i / steps
+                color = _gradient_color(t, sorted(grad["stops"], key=lambda x: x["position"]))
+                r = r_max * (1 - (steps - i) / steps)
+                canvas.create_oval(cx - r, cy - r, cx + r, cy + r, fill=color, outline="")
+        else:
+            angle = grad.get("angle", 180)
+            rad = math.radians(angle)
+            diag = math.hypot(cw, ch)
+            for i in range(steps):
+                t = i / steps
+                color = _gradient_color(t, sorted(grad["stops"], key=lambda x: x["position"]))
+                cx, cy = cw / 2, ch / 2
+                offset = (t - 0.5) * diag
+                dx = offset * math.cos(rad)
+                dy = offset * math.sin(rad)
+                x0 = cx + dx - math.cos(rad + math.pi / 2) * diag / 2
+                y0 = cy + dy - math.sin(rad + math.pi / 2) * diag / 2
+                x1 = cx + dx + math.cos(rad + math.pi / 2) * diag / 2
+                y1 = cy + dy + math.sin(rad + math.pi / 2) * diag / 2
+                canvas.create_polygon(x0, y0, x1, y1, fill=color, outline="")
+        canvas.create_text(cw // 2, ch // 2, text="C20  →  VRChat Bridge",
+                           fill="white", font=("", 11, "bold"))
+        css = _gradient_css(grad)
+        info = tk.Label(top, text=css, bg=BG_DARK, fg=TEXT_GRAY, font=("Consolas", 7), wraplength=340)
+        info.pack(padx=10)
         tk.Button(top, text="Close", bg=BG_MID, fg=TEXT_WHITE,
                   bd=0, cursor="hand2", command=top.destroy).pack(pady=4)
 
@@ -1420,9 +1784,8 @@ class App(tk.Tk):
             "color_accent_light": self._color_vars["accent_light"].get(),
             "color_text_white": self._color_vars["text_white"].get(),
             "color_text_gray": self._color_vars["text_gray"].get(),
-            "gradient_mode": self._gradient_var.get(),
-            "gradient_from": self._grad_from_var.get(),
-            "gradient_to": self._grad_to_var.get(),
+            "gradient": dict(GRADIENT_CFG),
+            "presets": load_config().get("presets", {}),
         }
         if self.bridge and self.bridge.running and self.bridge.hr_max > 0:
             record_history(self.bridge.bpm, self.bridge.hr_min, self.bridge.hr_max)
