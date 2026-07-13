@@ -21,6 +21,14 @@ pip install -r requirements.txt
 python hr_bridge.py [optional:watch-address]
 ```
 
+## Magic Chatbox Integration
+
+This bridge also serves heart rate data over TCP (`localhost:9876`) for Magic Chatbox's C20 module:
+
+1. Place `hr_bridge.exe` next to `MagicChatbox.exe` (or set the path in settings)
+2. Enable auto-launch in C20 Heart Rate settings
+3. The module will start the bridge and connect automatically
+
 ## OSC Parameters Sent
 
 | OSC Address | Type | Description |
@@ -37,10 +45,11 @@ python hr_bridge.py [optional:watch-address]
 - **"Device not found"** — restart the watch and try again
 - **No HR appearing** — try opening the heart rate app on the watch
 - **Disconnects** — the bridge auto-reconnects automatically
+- **Magic Chatbox shows "Not Connected"** — check that hr_bridge.exe is running
 
 ## How It Works
 
-The C20 watch exposes a standard BLE Heart Rate Service (0x180D) with the HR measurement characteristic (0x2A37). The bridge subscribes to notifications on this characteristic and forwards every reading to VRChat via OSC (port 9000). It also uses the proprietary MOYOUNG V2 protocol (FEE2/FEE3) to initialize continuous HR monitoring and as a fallback polling method.
+The C20 watch exposes a standard BLE Heart Rate Service (0x180D) with the HR measurement characteristic (0x2A37). The bridge subscribes to notifications on this characteristic, forwards readings to VRChat via OSC (port 9000), and serves them over TCP (port 9876) for Magic Chatbox integration.
 
 ## Technical Details
 
@@ -49,3 +58,4 @@ The C20 watch exposes a standard BLE Heart Rate Service (0x180D) with the HR mea
 - Standard HR characteristic: 0x2A37 (notify)
 - MOYOUNG write: 0xFEE2 / notify: 0xFEE3
 - Battery: 0x2A19
+- TCP port: 9876 (JSON protocol for Magic Chatbox)
