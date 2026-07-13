@@ -554,6 +554,39 @@ DEFAULT_GRADIENT = {
 }
 GRADIENT_CFG = dict(DEFAULT_GRADIENT)
 
+THEME_PRESETS = {
+    "Deep Purple (Default)": {
+        "bg_dark": "#1a1a2e", "bg_mid": "#232244", "bg_card": "#2d2b55",
+        "bg_input": "#1e1e3a", "accent": "#7c5cbf", "accent_light": "#9d7de0",
+        "text_white": "#f0eefe", "text_gray": "#a8a0c8",
+    },
+    "Midnight Blue": {
+        "bg_dark": "#0f1923", "bg_mid": "#17232e", "bg_card": "#1f303d",
+        "bg_input": "#0f1923", "accent": "#3b82f6", "accent_light": "#60a5fa",
+        "text_white": "#e8f0fe", "text_gray": "#94a3b8",
+    },
+    "Forest": {
+        "bg_dark": "#0d1f14", "bg_mid": "#162b1e", "bg_card": "#1e3a28",
+        "bg_input": "#0d1f14", "accent": "#22c55e", "accent_light": "#4ade80",
+        "text_white": "#ecfdf5", "text_gray": "#86efac",
+    },
+    "Sunset": {
+        "bg_dark": "#1c0f1a", "bg_mid": "#2a1622", "bg_card": "#3a1f2e",
+        "bg_input": "#1c0f1a", "accent": "#f472b6", "accent_light": "#f9a8d4",
+        "text_white": "#fdf2f8", "text_gray": "#fbcfe8",
+    },
+    "Cyberpunk": {
+        "bg_dark": "#0a0a0a", "bg_mid": "#1a1a2e", "bg_card": "#16213e",
+        "bg_input": "#0a0a0a", "accent": "#00ff88", "accent_light": "#66ffb2",
+        "text_white": "#e0e0e0", "text_gray": "#a0a0a0",
+    },
+    "Light Mode": {
+        "bg_dark": "#f0f0f5", "bg_mid": "#e4e4ec", "bg_card": "#ffffff",
+        "bg_input": "#e8e8ef", "accent": "#7c5cbf", "accent_light": "#9d7de0",
+        "text_white": "#1a1a2e", "text_gray": "#6b7280",
+    },
+}
+
 def _hex_to_rgb(h):
     h = h.lstrip("#")
     return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
@@ -1103,6 +1136,9 @@ class App(tk.Tk):
         tk.Label(self.dev_frame, text="\u2699 Dev Options", bg=BG_CARD, fg=ACCENT_LIGHT,
                  font=("", 9, "bold")).pack(anchor="w")
 
+        tk.Label(self.dev_frame, text="velinix says hello :3", bg=BG_CARD, fg=ACCENT_LIGHT,
+                 font=("", 8, "italic")).pack(anchor="w", pady=(0, 4))
+
         grid = tk.Frame(self.dev_frame, bg=BG_CARD)
         grid.pack(fill="x", pady=(4, 0))
 
@@ -1160,6 +1196,27 @@ class App(tk.Tk):
         for name in names:
             menu.add_command(label=name, command=lambda n=name: self._preset_var.set(n))
         self._preset_var.set(names[0] if names[0] else "")
+
+    def _apply_theme_preset(self):
+        name = self._theme_preset_var.get()
+        if name not in THEME_PRESETS:
+            return
+        palette = THEME_PRESETS[name]
+        cfg_map = {
+            "bg_dark": "BG_DARK", "bg_mid": "BG_MID", "bg_card": "BG_CARD",
+            "bg_input": "BG_INPUT", "accent": "ACCENT", "accent_light": "ACCENT_LIGHT",
+            "text_white": "TEXT_WHITE", "text_gray": "TEXT_GRAY",
+        }
+        for key, gname in cfg_map.items():
+            val = palette[key]
+            globals()[gname] = val
+            if key in self._color_vars:
+                self._color_vars[key].set(val)
+        setup_style()
+        self.configure(bg=BG_DARK)
+        self._redraw_gradient(self._body_canvas.winfo_width() or 600,
+                              self._body_canvas.winfo_height() or 400)
+        self._live_sync()
 
     def _load_preset(self):
         name = self._preset_var.get()
@@ -1550,6 +1607,21 @@ class App(tk.Tk):
         card = CollapsibleCard(page, "\U0001f3a8  Theme", collapsed=True)
         card.pack(fill="x", pady=(0, 6))
         body = card.body
+
+        # ── Theme Presets Dropdown ──
+        preset_row = tk.Frame(body, bg=BG_CARD)
+        preset_row.pack(fill="x", pady=(4, 0))
+        tk.Label(preset_row, text="Theme Preset:", bg=BG_CARD, fg=TEXT_GRAY,
+                 font=("", 8)).pack(side="left")
+        theme_names = list(THEME_PRESETS.keys())
+        self._theme_preset_var = tk.StringVar(value=theme_names[0])
+        theme_menu = tk.OptionMenu(preset_row, self._theme_preset_var, *theme_names)
+        theme_menu.config(bg=BG_MID, fg=TEXT_WHITE, bd=0, highlightthickness=0,
+                          activebackground=BG_CARD, width=18)
+        theme_menu["menu"].config(bg=BG_MID, fg=TEXT_WHITE)
+        theme_menu.pack(side="left", padx=(6, 4))
+        tk.Button(preset_row, text="\u25b6 Apply", font=("", 8), bg=BG_MID, fg=TEXT_WHITE,
+                  bd=0, padx=8, cursor="hand2", command=self._apply_theme_preset).pack(side="left")
 
         fallback = {"bg_dark": BG_DARK, "bg_mid": BG_MID, "bg_card": BG_CARD, "bg_input": BG_INPUT,
                      "accent": ACCENT, "accent_light": ACCENT_LIGHT, "text_white": TEXT_WHITE, "text_gray": TEXT_GRAY}
