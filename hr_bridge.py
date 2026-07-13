@@ -49,52 +49,54 @@ class HRBridge:
         self.client = None
         self.show_system_stats = show_system_stats
 
-    # ── System Stats ───────────────────────────────────────
+        # ── System Stats ───────────────────────────────────────
 
-def get_system_stats():
-    """Returns {cpu (int), idle (int), ram (int %), ram_gb (float)} or None."""
-    try:
-        if IS_LINUX:
-            with open("/proc/stat") as f:
-                vals = list(map(int, f.readline().split()[1:5]))
-            total = sum(vals)
-            idle = vals[3]
-            with open("/proc/meminfo") as f:
-                lines = f.readlines()
-            mem_total = int([l for l in lines if "MemTotal" in l][0].split()[1])
-            mem_avail = int([l for l in lines if "MemAvailable" in l][0].split()[1])
-            ram = int((mem_total - mem_avail) / mem_total * 100)
-            ram_gb = round((mem_total - mem_avail) / 1_048_576, 1)
-            return {"cpu": total, "idle": idle, "ram": ram, "ram_gb": ram_gb}
-        else:
-            import ctypes
-            kernel = ctypes.windll.kernel32
-            idle, kernel_t, user_t = ctypes.c_ulonglong(), ctypes.c_ulonglong(), ctypes.c_ulonglong()
-            kernel.GetSystemTimes(ctypes.byref(idle), ctypes.byref(kernel_t), ctypes.byref(user_t))
-            total = idle.value + kernel_t.value + user_t.value
-            buf = ctypes.create_string_buffer(64)
-            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(buf))
-            mem_load = int.from_bytes(buf[8:12], "little")
-            total_phys = int.from_bytes(buf[12:20], "little")
-            avail_phys = int.from_bytes(buf[20:28], "little")
-            ram_gb = round((total_phys - avail_phys) / (1024**3), 1)
-            return {"cpu": total, "idle": idle.value, "ram": mem_load, "ram_gb": ram_gb}
-    except:
-        return None
+    @staticmethod
+    def get_system_stats():
+        """Returns {cpu (int), idle (int), ram (int %), ram_gb (float)} or None."""
+        try:
+            if IS_LINUX:
+                with open("/proc/stat") as f:
+                    vals = list(map(int, f.readline().split()[1:5]))
+                total = sum(vals)
+                idle = vals[3]
+                with open("/proc/meminfo") as f:
+                    lines = f.readlines()
+                mem_total = int([l for l in lines if "MemTotal" in l][0].split()[1])
+                mem_avail = int([l for l in lines if "MemAvailable" in l][0].split()[1])
+                ram = int((mem_total - mem_avail) / mem_total * 100)
+                ram_gb = round((mem_total - mem_avail) / 1_048_576, 1)
+                return {"cpu": total, "idle": idle, "ram": ram, "ram_gb": ram_gb}
+            else:
+                import ctypes
+                kernel = ctypes.windll.kernel32
+                idle, kernel_t, user_t = ctypes.c_ulonglong(), ctypes.c_ulonglong(), ctypes.c_ulonglong()
+                kernel.GetSystemTimes(ctypes.byref(idle), ctypes.byref(kernel_t), ctypes.byref(user_t))
+                total = idle.value + kernel_t.value + user_t.value
+                buf = ctypes.create_string_buffer(64)
+                ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(buf))
+                mem_load = int.from_bytes(buf[8:12], "little")
+                total_phys = int.from_bytes(buf[12:20], "little")
+                avail_phys = int.from_bytes(buf[20:28], "little")
+                ram_gb = round((total_phys - avail_phys) / (1024**3), 1)
+                return {"cpu": total, "idle": idle.value, "ram": mem_load, "ram_gb": ram_gb}
+        except:
+            return None
 
-def get_cpu_percent(stats):
-    if not stats:
-        return 0
-    prev = getattr(get_cpu_percent, "_prev", None)
-    if not prev:
-        get_cpu_percent._prev = stats
-        return 0
-    total_delta = (stats["cpu"] - prev["cpu"]) or 1
-    idle_delta = stats["idle"] - prev["idle"]
-    get_cpu_percent._prev = stats
-    return int((1 - idle_delta / total_delta) * 100)
+    @staticmethod
+    def get_cpu_percent(stats):
+        if not stats:
+            return 0
+        prev = getattr(HRBridge.get_cpu_percent, "_prev", None)
+        if not prev:
+            HRBridge.get_cpu_percent._prev = stats
+            return 0
+        total_delta = (stats["cpu"] - prev["cpu"]) or 1
+        idle_delta = stats["idle"] - prev["idle"]
+        HRBridge.get_cpu_percent._prev = stats
+        return int((1 - idle_delta / total_delta) * 100)
 
-# ── OSC Output ──────────────────────────────────────────
+    # ── OSC Output ──────────────────────────────────────────
 
     def send_osc(self):
         bpm, batt = self.bpm, self.battery
@@ -104,9 +106,9 @@ def get_cpu_percent(stats):
         self.osc.send_message("/avatar/parameters/HRBattery", batt)
         self.osc.send_message("/avatar/parameters/HRBatteryFloat", batt / 100.0)
         if self.show_system_stats:
-            stats = get_system_stats()
+            stats = self.get_system_stats()
             if stats:
-                cpu = get_cpu_percent(stats)
+                cpu = self.get_cpu_percent(stats)
                 ram = stats["ram"]
                 self.osc.send_message("/avatar/parameters/CPU", cpu)
                 self.osc.send_message("/avatar/parameters/CPUFloat", cpu / 100.0)
