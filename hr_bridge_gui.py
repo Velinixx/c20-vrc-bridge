@@ -5,6 +5,7 @@ import json
 import math
 import os
 import platform
+import sys
 import threading
 import tkinter as tk
 from tkinter import ttk, scrolledtext, colorchooser as tkc
