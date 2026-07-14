@@ -43,7 +43,7 @@ CMD_SET_HR_INTERVAL = 31
 CMD_SET_QUICK_VIEW = 24
 IS_LINUX = platform.system() == "Linux"
 DEFAULT_ADDR = "96:D6:AF:D0:2B:6E"
-DEFAULT_TEMPLATE = "❤️ {bpm} BPM  🔋 {battery}%"
+DEFAULT_TEMPLATE = "❤️ {bpm} BPM  🔋 {battery}%  {media_icon} {title}"
 
 
 def make_packet(cmd, payload=bytes()):
@@ -242,9 +242,10 @@ class HRBridge:
             text = text.replace("{media_position}", f"{pos // 60:02d}:{pos % 60:02d}")
             text = text.replace("{media_duration}", f"{dur // 60:02d}:{dur % 60:02d}")
             text = text.replace("{media_is_paused}", str(self.media_is_paused).lower())
+            text = text.replace("{media_icon}", "⏸" if self.media_is_paused else "▶")
         else:
             text = text.replace("{song}", "").replace("{artist}", "").replace("{title}", "")
-            text = text.replace("{media_progress}", "0").replace("{media_position}", "00:00").replace("{media_duration}", "00:00").replace("{media_is_paused}", "false")
+            text = text.replace("{media_progress}", "0").replace("{media_position}", "00:00").replace("{media_duration}", "00:00").replace("{media_is_paused}", "false").replace("{media_icon}", "")
         if self.show_system_stats:
             text = text.replace("{cpu}", str(self.cpu))
             text = text.replace("{ram}", str(self.ram))
@@ -481,7 +482,7 @@ class HRBridge:
 
 
 # ── Config ──────────────────────────────────────────────────
-CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bridge_config.json")
+CONFIG_PATH = os.path.join(_DATA_DIR, "bridge_config.json")
 
 DEFAULT_PRESETS = {
     "Minimal": "\u2764\ufe0f {bpm} BPM",
@@ -505,7 +506,11 @@ def save_config(data):
 
 
 # ── HR History ────────────────────────────────────────────────
-HISTORY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hr_history.json")
+if getattr(sys, 'frozen', False):
+    _DATA_DIR = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    _DATA_DIR = os.path.dirname(os.path.abspath(__file__))
+HISTORY_PATH = os.path.join(_DATA_DIR, "hr_history.json")
 
 def load_history():
     try:
@@ -919,14 +924,14 @@ class App(tk.Tk):
         self._template_entry.pack(fill="x", pady=(6, 2))
         vars_row = tk.Frame(card2, bg=BG_CARD)
         vars_row.pack(fill="x")
-        tk.Label(vars_row, text="{bpm} {hr_min} {hr_max} {battery} {cpu} {ram} {ram_gb} {song} {artist} {title} {media_progress} {media_position} {media_duration} {media_is_paused}",
+        tk.Label(vars_row, text="{bpm} {hr_min} {hr_max} {battery} {cpu} {ram} {ram_gb} {song} {artist} {title} {media_progress} {media_position} {media_duration} {media_is_paused} {media_icon}",
                  bg=BG_CARD, fg=TEXT_GRAY, font=("", 7)).pack(side="left")
-        self._qbtn(vars_row, "Variables you can use:\n{bpm} - heart rate\n{hr_min} / {hr_max} - min/max\n{battery} - battery %\n{cpu} - CPU usage %\n{ram} - RAM usage %\n{ram_gb} - RAM used (GB)\n{song} / {artist} / {title} - media\n{media_progress} - 0.00-1.00 position\n{media_position} - mm:ss\n{media_duration} - mm:ss\n{media_is_paused} - true/false\nExample: ❤ {bpm} BPM | 🔋 {battery}%")
+        self._qbtn(vars_row, "Variables you can use:\n{bpm} - heart rate\n{hr_min} / {hr_max} - min/max\n{battery} - battery %\n{cpu} - CPU usage %\n{ram} - RAM usage %\n{ram_gb} - RAM used (GB)\n{song} / {artist} / {title} - media\n{media_progress} - 0.00-1.00 position\n{media_position} - mm:ss\n{media_duration} - mm:ss\n{media_is_paused} - true/false\n{media_icon} - ▶ or ⏸\nExample: ❤ {bpm} BPM | 🔋 {battery}%")
 
         # template builder buttons
         btn_row = tk.Frame(card2, bg=BG_CARD)
         btn_row.pack(fill="x", pady=(2, 0))
-        for t in ("{bpm}", "{hr_min}", "{hr_max}", "{battery}", "{cpu}", "{ram}", "{ram_gb}", "{song}", "{artist}", "{title}", "{media_progress}", "{media_position}", "{media_duration}", "{media_is_paused}"):
+        for t in ("{bpm}", "{hr_min}", "{hr_max}", "{battery}", "{cpu}", "{ram}", "{ram_gb}", "{song}", "{artist}", "{title}", "{media_progress}", "{media_position}", "{media_duration}", "{media_is_paused}", "{media_icon}"):
             b = tk.Button(btn_row, text=t, font=("Consolas", 7), bg=BG_MID, fg=TEXT_WHITE,
                           bd=0, padx=4, cursor="hand2", command=lambda t=t: self._insert_template(t))
             b.pack(side="left", padx=(0, 2))
